@@ -12,6 +12,8 @@ interoperable, and benchmark implementations of PV system models.
 There are at least as many opinions about how to model PV systems as
 there are modelers of PV systems, so 
 pvlib-python provides several modeling paradigms.
+We suggest that you experiment with each paradigm to learn
+which best suits you and your application.
 
 
 Modeling paradigms
@@ -34,7 +36,9 @@ configuration at a handful of sites listed below.
 
 .. ipython:: python
 
+    # standard scientific python imports
     import pandas as pd
+    import numpy as np
     import matplotlib.pyplot as plt
     
     # seaborn makes the plots look nicer
@@ -43,7 +47,7 @@ configuration at a handful of sites listed below.
     
     times = pd.DatetimeIndex(start='2015', end='2016', freq='1h')
     
-    # very approximate
+    # set up a handful of very approximate coordinates
     # latitude, longitude, name, altitude
     coordinates = [(30, -110, 'Tucson', 700),
                    (35, -105, 'Albuquerque', 1500),
@@ -59,6 +63,7 @@ configuration at a handful of sites listed below.
     inverter = sapm_inverters['ABB__MICRO_0_25_I_OUTD_US_208_208V__CEC_2014_']
     
     # specify constant ambient air temp and wind for simplicity
+    # can also use arrays or pandas Series objects
     temp_air = 20
     wind_speed = 0
 
@@ -67,7 +72,7 @@ Procedural
 ^^^^^^^^^^
 
 The straightforward procedural code can be used for all modeling
-steps in pvlib-python.
+steps in pvlib-python. This is most similar to PVLIB Matlab.
 
 The following code demonstrates how to use the procedural code
 to accomplish our system modeling goal:
@@ -124,12 +129,21 @@ assembled collection of modules, inverters, etc.,
 a :py:class:`~pvlib.location.Location` object represents a
 particular place on the planet,
 and a :py:class:`~pvlib.modelchain.ModelChain` object describes
-the modeling chain used to calculate PV output at that Location.
+the modeling steps necessary to calculate the PVSystem's
+output at that Location.
+
 This can be a useful paradigm if you prefer to think about
-the PV system and its location as separate concepts or if
-you develop your own ModelChain subclasses.
-It can also be helpful if you make extensive use of Location-specific
-methods for other calculations.
+the PV system and its location as separate concepts.
+For example, perhaps you want to consider taking the same
+collection of modules and inverters and putting them at different
+locations on the globe.
+The ModelChain object can then be used to perform calculations
+for the combination of the PVSystem and the Location.
+The ability to create your own subclasses of ModelChain may
+enable useful and novel modeling techniques.
+
+Location objects can, of course, be helpful for applications
+than only require irradiance and/or solar position calculations.
 
 The following code demonstrates how to use
 :py:class:`~pvlib.location.Location`,
