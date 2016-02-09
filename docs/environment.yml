@@ -8,6 +8,7 @@ dependencies:
     - ephem
     - numba
     - ipython
+    - jupyter
     - sphinx
     - numpydoc
     - matplotlib
