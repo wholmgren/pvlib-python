@@ -1406,10 +1406,10 @@ def singlediode(module, photocurrent, saturation_current,
               'i_0': saturation_current,
               'i_l': photocurrent}
 
-    from scipy.optimize import newton
+    import scipy.optimize
 
-    i_mp = newton(
-        _dpower_dcurrent, i_sc/2, args=(resistance_shunt, resistance_series,
+    i_mp = scipy.optimize.fsolve(
+        _dpower_dcurrent, i_sc*0.75, args=(resistance_shunt, resistance_series,
                                         nNsVth, saturation_current,
                                         photocurrent))
 
