@@ -5,6 +5,7 @@ performance of PV modules and inverters.
 
 from __future__ import division
 
+import functools
 import io
 try:
     from urllib2 import urlopen
@@ -1405,17 +1406,29 @@ def singlediode(module, photocurrent, saturation_current,
               'i_0': saturation_current,
               'i_l': photocurrent}
 
+    from scipy.optimize import newton
+
+    i_mp = newton(
+        _dpower_dcurrent, i_sc/2, args=(resistance_shunt, resistance_series,
+                                        nNsVth, saturation_current,
+                                        photocurrent))
+
+    v_mp = v_from_i(resistance_shunt, resistance_series, nNsVth, i_mp,
+                    saturation_current, photocurrent)
+
+    p_mp = i_mp * v_mp
+
     # to do:
     # replace with a call to scipy.optimize or minimize(_dpower_dcurrent)
     # and then calculate v_mp, and then calculate p_mp = i_mp*v_mp
     # might need a partial(_dpower_dcurrent) for all params but I
-    p_mp, v_mp = _golden_sect_DataFrame(params, 0, module['V_oc_ref']*1.14,
-                                        _pwr_optfcn)
-
-    # Invert the Power-Current curve. Find the current where the inverted power
-    # is minimized. This is i_mp. Start the optimization at v_oc/2
-    i_mp = i_from_v(resistance_shunt, resistance_series, nNsVth, v_mp,
-                    saturation_current, photocurrent)
+#     p_mp, v_mp = _golden_sect_DataFrame(params, 0, module['V_oc_ref']*1.14,
+#                                         _pwr_optfcn)
+#
+#     # Invert the Power-Current curve. Find the current where the inverted power
+#     # is minimized. This is i_mp. Start the optimization at v_oc/2
+#     i_mp = i_from_v(resistance_shunt, resistance_series, nNsVth, v_mp,
+#                     saturation_current, photocurrent)
 
     # Find Ix and Ixx using Lambert W
     i_x = i_from_v(resistance_shunt, resistance_series, nNsVth,
@@ -1680,8 +1693,12 @@ def i_from_v(resistance_shunt, resistance_series, nNsVth, voltage,
 
     return I.real
 
+try:
+    from scipy.special import lambertw
+except ImportError:
+    raise ImportError('The singlediode and related functions require scipy')
 
-def _dpower_dcurrent(resistance_shunt, resistance_series, nNsVth, current,
+def _dpower_dcurrent(current, resistance_shunt, resistance_series, nNsVth,
                      saturation_current, photocurrent):
     '''
     Calculates the partial derivative of power with respect to current
@@ -1742,7 +1759,7 @@ def _dpower_dcurrent(resistance_shunt, resistance_series, nNsVth, current,
 
     # Eqn. 10 in Jain and Kapoor, 2004
 
-    dpdi = (Iph + I0 - 2*I)*Rsh - 2*I*Rs - nNsVth*z + I*Rsh*z/(1+z)
+    dpdi = (IL + I0 - 2*I)*Rsh - 2*I*Rs - nNsVth*z + I*Rsh*z/(1+z)
 
     return dpdi.real
 
