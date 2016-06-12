@@ -1404,14 +1404,29 @@ def singlediode(module, photocurrent, saturation_current,
               'r_s': resistance_series,
               'nNsVth': nNsVth,
               'i_0': saturation_current,
-              'i_l': photocurrent}
+              'i_l': photocurrent,
+              'i_sc': i_sc}
+
+    try:
+        params = pd.DataFrame(params)
+    except ValueError:
+        params = pd.DataFrame(params, index=[0])
 
     import scipy.optimize
 
-    i_mp = scipy.optimize.fsolve(
-        _dpower_dcurrent, i_sc*0.75, args=(resistance_shunt, resistance_series,
-                                        nNsVth, saturation_current,
-                                        photocurrent))
+#     i_mp = scipy.optimize.fmin_ncg(
+#         _neg_p_from_i, i_sc*0.75, _neg_dpower_dcurrent,
+#         args=(resistance_shunt, resistance_series, nNsVth, saturation_current,
+#               photocurrent))
+
+    i_mp = []
+    for time, data in params.iterrows():
+        i_mp.append(scipy.optimize.fmin_tnc(
+            _neg_p_from_i, data['i_sc']*0.9, _neg_dpower_dcurrent,
+            args=(data['r_sh'], data['r_s'], data['nNsVth'], data['i_0'],
+                  data['i_l']),
+            disp=0, approx_grad=False)[0][0])
+    i_mp = np.array(i_mp)
 
     v_mp = v_from_i(resistance_shunt, resistance_series, nNsVth, i_mp,
                     saturation_current, photocurrent)
@@ -1606,10 +1621,6 @@ def v_from_i(resistance_shunt, resistance_series, nNsVth, current,
     parameters of real solar cells using Lambert W-function", Solar
     Energy Materials and Solar Cells, 81 (2004) 269-277.
     '''
-    try:
-        from scipy.special import lambertw
-    except ImportError:
-        raise ImportError('This function requires scipy')
 
     Rsh = resistance_shunt
     Rs = resistance_series
@@ -1672,10 +1683,6 @@ def i_from_v(resistance_shunt, resistance_series, nNsVth, voltage,
     parameters of real solar cells using Lambert W-function", Solar
     Energy Materials and Solar Cells, 81 (2004) 269-277.
     '''
-    try:
-        from scipy.special import lambertw
-    except ImportError:
-        raise ImportError('This function requires scipy')
 
     Rsh = resistance_shunt
     Rs = resistance_series
@@ -1698,8 +1705,65 @@ try:
 except ImportError:
     raise ImportError('The singlediode and related functions require scipy')
 
-def _dpower_dcurrent(current, resistance_shunt, resistance_series, nNsVth,
-                     saturation_current, photocurrent):
+
+def _neg_p_from_i(current, resistance_shunt, resistance_series, nNsVth,
+                  saturation_current, photocurrent):
+    '''
+    Calculates the partial derivative of power with respect to current
+    per Eq 10 Jain and Kapoor 2004 [1].
+
+    Parameters
+    ----------
+    resistance_shunt : float or Series
+        Shunt resistance in ohms under desired IV curve conditions.
+        Often abbreviated ``Rsh``.
+
+    resistance_series : float or Series
+        Series resistance in ohms under desired IV curve conditions.
+        Often abbreviated ``Rs``.
+
+    nNsVth : float or Series
+        The product of three components. 1) The usual diode ideal factor
+        (n), 2) the number of cells in series (Ns), and 3) the cell
+        thermal voltage under the desired IV curve conditions (Vth). The
+        thermal voltage of the cell (in volts) may be calculated as
+        ``k*temp_cell/q``, where k is Boltzmann's constant (J/K),
+        temp_cell is the temperature of the p-n junction in Kelvin, and
+        q is the charge of an electron (coulombs).
+
+    current : float or Series
+        The current in amperes under desired IV curve conditions.
+
+    saturation_current : float or Series
+        Diode saturation current in amperes under desired IV curve
+        conditions. Often abbreviated ``I_0``.
+
+    photocurrent : float or Series
+        Light-generated current (photocurrent) in amperes under desired
+        IV curve conditions. Often abbreviated ``I_L``.
+
+    Returns
+    -------
+    current : np.array
+
+    References
+    ----------
+    [1] A. Jain, A. Kapoor, "Exact analytical solutions of the
+    parameters of real solar cells using Lambert W-function", Solar
+    Energy Materials and Solar Cells, 81 (2004) 269-277.
+    '''
+
+    # consider using numpy's out parameters, numexpr, or numba to
+    # make this faster
+
+    p = -current * v_from_i(resistance_shunt, resistance_series, nNsVth,
+                           current, saturation_current, photocurrent)
+
+    return p
+
+
+def _neg_dpower_dcurrent(current, resistance_shunt, resistance_series, nNsVth,
+                         saturation_current, photocurrent):
     '''
     Calculates the partial derivative of power with respect to current
     per Eq 10 Jain and Kapoor 2004 [1].
@@ -1761,7 +1825,7 @@ def _dpower_dcurrent(current, resistance_shunt, resistance_series, nNsVth,
 
     dpdi = (IL + I0 - 2*I)*Rsh - 2*I*Rs - nNsVth*z + I*Rsh*z/(1+z)
 
-    return dpdi.real
+    return -dpdi.real
 
 
 def snlinverter(inverter, v_dc, p_dc):
