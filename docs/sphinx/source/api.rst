@@ -18,12 +18,12 @@ corresponding procedural code.
 .. autosummary::
    :toctree: generated/
 
-   location.Location
-   pvsystem.PVSystem
-   tracking.SingleAxisTracker
-   modelchain.ModelChain
-   pvsystem.LocalizedPVSystem
-   tracking.LocalizedSingleAxisTracker
+   Location
+   PVSystem
+   SingleAxisTracker
+   ModelChain
+   LocalizedPVSystem
+   LocalizedSingleAxisTracker
 
 
 Solar Position
