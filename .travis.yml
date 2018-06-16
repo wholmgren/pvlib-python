@@ -37,12 +37,20 @@ cache:
 # setup miniconda for numpy, scipy, pandas
 before_install:
     - echo "before install"
-    - export PATH=/usr/lib/ccache:$PATH
     - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
-        wget http://repo.continuum.io/miniconda/Miniconda-3.16.0-Linux-x86_64.sh -O miniconda.sh;
+        export PYVER="2"
       else
-        wget http://repo.continuum.io/miniconda/Miniconda3-3.16.0-Linux-x86_64.sh -O miniconda.sh;
+        export PYVER="3"
       fi
+    - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then
+        export OSSTR="MacOSX-x86_64.sh"
+      else
+        export OSSTR="Linux-x86_64.sh"
+        export PATH=/usr/lib/ccache:$PATH
+      fi
+    - export BASE="http://repo.continuum.io/miniconda/Miniconda"
+    - export CONDAVER="4.5.4"
+    - wget $BASE$PYVER-$CONDAVER-$OSSTR -O miniconda.sh;
     - bash miniconda.sh -b -p $HOME/miniconda
     - export PATH="$HOME/miniconda/bin:$PATH"
     - hash -r
