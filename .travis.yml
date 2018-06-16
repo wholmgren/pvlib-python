@@ -38,15 +38,15 @@ cache:
 before_install:
     - echo "before install"
     - if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]]; then
-        export PYVER="2"
+        export PYVER="2";
       else
-        export PYVER="3"
+        export PYVER="3";
       fi
     - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then
-        export OSSTR="MacOSX-x86_64.sh"
+        export OSSTR="MacOSX-x86_64.sh";
       else
-        export OSSTR="Linux-x86_64.sh"
-        export PATH=/usr/lib/ccache:$PATH
+        export OSSTR="Linux-x86_64.sh";
+        export PATH=/usr/lib/ccache:$PATH;
       fi
     - export BASE="http://repo.continuum.io/miniconda/Miniconda"
     - export CONDAVER="4.5.4"
