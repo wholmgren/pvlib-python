@@ -20,6 +20,31 @@ def basic_chain(weather, latitude, longitude,
                 altitude=None, pressure=None,
                 dc_model=None, ac_model=None):
 
+    """
+    Parameters
+    ----------
+    see ModelChain documentation for now
+
+    Returns
+    -------
+    dsk : dict
+        Keys are dask task graph nodes, including:
+            solar_position, poa_irrad, temps, effective_irradiance,
+            dc, ac.
+        Values are the instructions dask needs to compute the
+        corresponding result.
+
+    Examples
+    --------
+    times = pd.DatetimeIndex(start='20180601 0000-0700', freq='12H', periods=2)
+    weather = pd.DataFrame({'ghi': [0, 1000], 'dni': [0, 950], 'dhi': [0, 100], 'temp_air': 25, 'wind_speed': 0}, index=times)
+    dsk = pvlib.mcdask.basic_chain(weather, 32.2, -110.9, 30, 180, {'pdc0': 1000, 'gamma_pdc': -0.025}, {})
+    dask.get(dsk, 'ac')
+    2018-06-01 00:00:00-07:00           NaN
+    2018-06-01 12:00:00-07:00    137.619168
+    Freq: 12H, dtype: float64
+    """
+
     # these parameters are used by several functions, so define
     # look-up methods once here.
     apparent_zenith = (getattr, 'solar_position', 'apparent_zenith')
