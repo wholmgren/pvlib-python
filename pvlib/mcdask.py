@@ -1,15 +1,15 @@
 import warnings
 
 from functools import partial
-from operator import truediv, mul, sub, add
+from operator import add, mul, sub, truediv
+
+from dask.compatibility import apply
 
 import pandas as pd
 
-from pvlib import (solarposition, pvsystem, clearsky, atmosphere, tools)
-from pvlib.tracking import SingleAxisTracker
 import pvlib.irradiance  # avoid name conflict with full import
+from pvlib import (atmosphere, pvsystem, solarposition)
 
-from dask.compatibility import apply
 
 def basic_chain(weather, latitude, longitude,
                 orientation_parameters,
@@ -206,7 +206,7 @@ def assign_aoi_model(aoi_model, module_parameters):
         if model == 'ashrae':
             model_dsk = (pvsystem.ashraeiam, 'aoi')
         elif model == 'physical':
-            model_dsk = (physicaliam, 'aoi')
+            model_dsk = (pvsystem.physicaliam, 'aoi')
         elif model == 'sapm':
             model_dsk = (pvsystem.sapm, 'aoi', module_parameters)
         elif model == 'no_loss':
@@ -285,7 +285,7 @@ def assign_dc_model(dc_model, module_parameters):
                          (truediv, 'effective_irradiance', 1000),
                          (getattr, 'temps', 'temp_cell'),
                          module_parameters)
-        elif mode ==  'singlediode':
+        elif model == 'singlediode':
             raise NotImplementedError
         else:
             raise ValueError(model + ' is not a valid DC power model')
