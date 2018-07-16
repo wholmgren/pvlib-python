@@ -12,7 +12,7 @@ import pvlib.irradiance  # avoid name conflict with full import
 from dask.compatibility import apply
 
 def basic_chain(weather, latitude, longitude,
-                surface_tilt, surface_azimuth,
+                orientation_parameters,
                 module_parameters, inverter_parameters,
                 transposition_model='haydavies',
                 solar_position_method='nrel_numpy',
@@ -38,12 +38,22 @@ def basic_chain(weather, latitude, longitude,
 
     Examples
     --------
+    weather inputs:
     times = pd.DatetimeIndex(start='20180601 0000-0700', freq='12H', periods=2)
     weather = pd.DataFrame({'ghi': [0, 1000], 'dni': [0, 950], 'dhi': [0, 100], 'temp_air': 25, 'wind_speed': 0}, index=times)
-    dsk = pvlib.mcdask.basic_chain(weather, 32.2, -110.9, 30, 180, {'pdc0': 1000, 'gamma_pdc': -0.025}, {}, losses_model='pvwatts', spectral_model='no_loss', aoi_model='no_loss')
+
+    fixed:
+    dsk = pvlib.mcdask.basic_chain(weather, 32.2, -110.9, {'surface_tilt': 30, 'surface_azimuth': 180}, {'pdc0': 1000, 'gamma_pdc': -0.025}, {}, losses_model='pvwatts', spectral_model='no_loss', aoi_model='no_loss')
     dask.get(dsk, 'ac')
     2018-06-01 00:00:00-07:00           NaN
     2018-06-01 12:00:00-07:00    118.248361
+    Freq: 12H, dtype: float64
+
+    tracking:
+    pvlib.mcdask = reload(pvlib.mcdask); dsk = pvlib.mcdask.basic_chain(weather, 32.2, -110.9, {}, {'pdc0': 1000, 'gamma_pdc': -0.025}, {}, losses_model='pvwatts', spectral_model='no_loss', aoi_model='no_loss')
+    dask.get(dsk, 'ac')
+    2018-06-01 00:00:00-07:00         NaN
+    2018-06-01 12:00:00-07:00    96.20564
     Freq: 12H, dtype: float64
     """
 
@@ -74,10 +84,9 @@ def basic_chain(weather, latitude, longitude,
         'airmass_absolute': (atmosphere.absoluteairmass, 'airmass_relative',
                              'pressure'),
         'dni_extra-1': (pvlib.irradiance.extraradiation, 'times'),
-        'aoi': (pvlib.irradiance.aoi, surface_tilt, surface_azimuth,
-                apparent_zenith, azimuth),
+        # fixed_or_tracking_path call below fills in missing info here
         'poa_irrad': (apply, pvlib.irradiance.total_irrad,
-                      [surface_tilt, surface_azimuth,
+                      ['surface_tilt-1', 'surface_azimuth-1',
                        apparent_zenith, azimuth,
                        weather['dni'], weather['ghi'], weather['dhi']],
                       (dict, [['model', transposition_model],
@@ -93,6 +102,10 @@ def basic_chain(weather, latitude, longitude,
                 (mul, poa_direct, 'aoi_modifier'),
                 (mul, (getattr, 'module_parameters', 'FD', 1), poa_diffuse)))
     }
+
+    orientation_dsk = fixed_or_tracking_path(orientation_parameters,
+                                             apparent_zenith, azimuth)
+    dsk = dict((list(dsk.items()) + list(orientation_dsk.items())))
 
     try:
         dsk['aoi_modifier'] = assign_aoi_model(aoi_model, module_parameters)
@@ -152,6 +165,35 @@ def infer_pressure_altitude(altitude, pressure):
     elif pressure is None:
         pressure = atmosphere.alt2pres(altitude)
     return altitude, pressure
+
+
+def fixed_or_tracking_path(orientation_parameters, apparent_zenith, azimuth):
+    params = set(orientation_parameters.keys())
+    if set(['surface_tilt', 'surface_azimuth']) <= params:
+        dsk = fixed_path(orientation_parameters, apparent_zenith, azimuth)
+    else:
+        dsk = tracking_path(orientation_parameters, apparent_zenith, azimuth)
+    return dsk
+
+
+def fixed_path(orientation_parameters, apparent_zenith, azimuth):
+    dsk = {
+        'surface_tilt-1': orientation_parameters['surface_tilt'],
+        'surface_azimuth-1': orientation_parameters['surface_azimuth'],
+        'aoi': (pvlib.irradiance.aoi, 'surface_tilt-1', 'surface_azimuth-1',
+                apparent_zenith, azimuth)}
+    return dsk
+
+
+def tracking_path(orientation_parameters, apparent_zenith, azimuth):
+    dsk = {
+        # add support for curried max_angle, gcr, etc.
+        'tracking': (pvlib.tracking.singleaxis, apparent_zenith, azimuth),
+        # add fillna 0
+        'surface_tilt-1': (getattr, 'tracking', 'surface_tilt'),
+        'surface_azimuth-1': (getattr, 'tracking', 'surface_azimuth'),
+        'aoi': (getattr, 'tracking', 'aoi')}
+    return dsk
 
 
 def assign_aoi_model(aoi_model, module_parameters):
