@@ -70,6 +70,7 @@ def basic_chain(weather, latitude, longitude,
     # functions below.
     # wind_speed-1 and similar prevent circular references.
     dsk = {
+        # refactor times through dni_extra-1 into prepare_inputs()
         'times': weather.index,
         'wind_speed-1': (var_or_default, weather, 'wind_speed', 0),
         'temp_air-1': (var_or_default, weather, 'temp_air', 25),
@@ -84,7 +85,7 @@ def basic_chain(weather, latitude, longitude,
         'airmass_absolute': (atmosphere.absoluteairmass, 'airmass_relative',
                              'pressure'),
         'dni_extra-1': (pvlib.irradiance.extraradiation, 'times'),
-        # fixed_or_tracking_path call below fills in missing info here
+        # fixed_or_tracking_path call below fills in missing aoi, surface info
         'poa_irrad': (apply, pvlib.irradiance.total_irrad,
                       ['surface_tilt-1', 'surface_azimuth-1',
                        apparent_zenith, azimuth,
