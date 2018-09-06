@@ -638,9 +638,7 @@ class PVSystem(object):
             A scaled copy of the input data.
         """
 
-        return scale_voltage_current_power(data,
-                                           voltage=self.modules_per_string,
-                                           current=self.strings_per_inverter)
+        return scale_voltage_current_power(data,voltage=self.modules_per_string, current=self.strings_per_inverter)
 
     def pvwatts_dc(self, g_poa_effective, temp_cell):
         """
