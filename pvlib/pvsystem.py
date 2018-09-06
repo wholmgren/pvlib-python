@@ -634,9 +634,9 @@ class PVSystem(object):
             A scaled copy of the input data.
         """
 
-        return scale_voltage_current_power(data,
-                                           voltage=self.modules_per_string,
-                                           current=self.strings_per_inverter)
+        return scale_voltage_current_power(
+            data, voltage=self.modules_per_string,
+            current=self.strings_per_inverter)
 
     def pvwatts_dc(self, g_poa_effective, temp_cell):
         """
@@ -674,8 +674,7 @@ class PVSystem(object):
 
         See :py:func:`pvwatts_ac` for details.
         """
-        kwargs = _build_kwargs(['eta_inv_nom', 'eta_inv_ref'],
-                               self.inverter_parameters)
+        kwargs = _build_kwargs(['eta_inv_nom', 'eta_inv_ref'],   self.inverter_parameters)
 
         return pvwatts_ac(pdc, self.module_parameters['pdc0'], **kwargs)
 
@@ -709,8 +708,7 @@ class LocalizedPVSystem(PVSystem, Location):
     system attributes and modeling functions. This class combines the
     attributes and methods of the PVSystem and Location classes.
 
-    The LocalizedPVSystem may have bugs due to the difficulty of
-    robustly implementing multiple inheritance. See
+    The LocalizedPVSystem may have bugs due to the difficulty of robustly implementing multiple inheritance. See
     :py:class:`~pvlib.modelchain.ModelChain` for an alternative paradigm
     for modeling PV systems at specific locations.
     """
