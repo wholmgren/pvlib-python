@@ -96,7 +96,7 @@ def read_bsrn(filename):
     else:
         open_func, mode = open, 'r'
     with open_func(filename, mode) as f:
-        # first line should be *U0001 or *C0001, so read it and discard
+        # first line should be *U0001 or *C0001, so read it and disca rd
         f.readline()
         line_no_dict['0001'] = 1
         date_line = f.readline()  # second line contains the year and month
