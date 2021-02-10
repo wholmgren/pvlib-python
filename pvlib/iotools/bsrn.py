@@ -89,13 +89,15 @@ def read_bsrn(filename):
     """
 
     # Read file and store the starting line number for each logical record (LR)
+    # line numbers are 1-indexed for ease of comparison with raw text editors
     line_no_dict = {}
     if str(filename).endswith('.gz'):  # check if file is a gzipped (.gz) file
         open_func, mode = gzip.open, 'rt'
     else:
         open_func, mode = open, 'r'
     with open_func(filename, mode) as f:
-        f.readline()  # first line should be *U0001, so read it and discard
+        # first line should be *U0001 or *C0001, so read it and discard
+        f.readline()
         line_no_dict['0001'] = 1
         date_line = f.readline()  # second line contains the year and month
         start_date = pd.Timestamp(year=int(date_line[7:11]),
@@ -103,13 +105,13 @@ def read_bsrn(filename):
                                   tz='UTC')  # BSRN timestamps are UTC
         for num, line in enumerate(f, start=3):
             if line.startswith('*'):  # Find start of all logical records
-                line_no_dict[line[2:6]] = num  # key is 4 digit LR number
+                line_no_dict[line[2:6]] = num  # key is 4 digit LR string
 
     # Determine start and end line of logical record LR0100 to be parsed
-    start_row = line_no_dict['0100'] + 1  # Start line number
+    start_row = line_no_dict['0100'] + 1  # Start line number of actual data
     # If LR0100 is the last logical record, then read rest of file
     if start_row-1 == max(line_no_dict.values()):
-        end_row = num  # then parse rest of the file
+        end_row = num  # the last line of the file
     else:  # otherwise parse until the beginning of the next logical record
         end_row = min([i for i in line_no_dict.values() if i > start_row]) - 1
     nrows = end_row-start_row+1
