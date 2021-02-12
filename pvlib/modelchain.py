@@ -11,13 +11,14 @@ import itertools
 import warnings
 import pandas as pd
 from dataclasses import dataclass, field
-from typing import Union, Tuple, Optional, TypeVar
+from typing import Callable, Union, Tuple, Optional, TypeVar
 
 from pvlib import (atmosphere, clearsky, inverter, pvsystem, solarposition,
                    temperature, tools)
 from pvlib.tracking import SingleAxisTracker
 import pvlib.irradiance  # avoid name conflict with full import
-from pvlib.pvsystem import _DC_MODEL_PARAMS
+from pvlib.location import Location
+from pvlib.pvsystem import PVSystem, _DC_MODEL_PARAMS
 from pvlib._deprecation import pvlibDeprecationWarning
 from pvlib.tools import _build_kwargs
 
@@ -394,15 +395,23 @@ class ModelChain:
                          'cell_temperature', 'effective_irradiance',
                          'dc', 'ac', 'diode_params', 'tracking']
 
-    def __init__(self, system, location,
-                 orientation_strategy=None,
-                 clearsky_model='ineichen',
-                 transposition_model='haydavies',
-                 solar_position_method='nrel_numpy',
-                 airmass_model='kastenyoung1989',
-                 dc_model=None, ac_model=None, aoi_model=None,
-                 spectral_model=None, temperature_model=None,
-                 losses_model='no_loss', name=None):
+    def __init__(
+            self,
+            system: Union[PVSystem, SingleAxisTracker],
+            location: Location,
+            orientation_strategy: Optional[str] = None,
+            clearsky_model: str = 'ineichen',
+            transposition_model: str = 'haydavies',
+            solar_position_method: str = 'nrel_numpy',
+            airmass_model: str = 'kastenyoung1989',
+            dc_model: Optional[Union[Callable, str]] = None,
+            ac_model: Optional[Union[Callable, str]] = None,
+            aoi_model: Optional[Union[Callable, str]] = None,
+            spectral_model: Optional[Union[Callable, str]] = None,
+            temperature_model: Optional[Union[Callable, str]] = None,
+            losses_model: str = 'no_loss',
+            name: Optional[str] = None
+    ):
 
         self.name = name
         self.system = system
