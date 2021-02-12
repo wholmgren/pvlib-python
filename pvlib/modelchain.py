@@ -411,7 +411,7 @@ class ModelChain:
             temperature_model: Optional[Union[Callable, str]] = None,
             losses_model: str = 'no_loss',
             name: Optional[str] = None
-    ):
+    ) -> None:
 
         self.name = name
         self.system = system

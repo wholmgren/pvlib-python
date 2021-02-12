@@ -125,7 +125,7 @@ class BaseArray:
         strings: int = 1,
         racking_model: Optional[str] = None,
         name: Optional[str] = None
-    ):
+    ) -> None:
 
         self.surface_type = surface_type
         if albedo is not None:
@@ -344,7 +344,7 @@ class FixedTiltArray(BaseArray):
         strings: int = 1,
         racking_model: Optional[str] = None,
         name: Optional[str] = None
-    ):
+    ) -> None:
         self.name = name
         self.surface_tilt = surface_tilt
         self.surface_azimuth = surface_azimuth
@@ -545,7 +545,7 @@ class SingleAxisArray(BaseArray):
         strings: int = 1,
         racking_model: Optional[str] = None,
         name: Optional[str] = None
-    ):
+    ) -> None:
 
         self.name = name
         self.axis_tilt = axis_tilt
@@ -812,7 +812,7 @@ class PVSystem:
         racking_model: Optional[str] = None,
         losses_parameters: Optional[Union[Dict[str, float], pd.Series]] = None,
         name: Optional[str] = None
-    ):
+    ) -> None:
 
         if arrays is not None:
             self.arrays = tuple(arrays)
