@@ -58,14 +58,16 @@ class Location:
         self,
         latitude: float,
         longitude: float,
-        tz: Union[str, int, float, pytz.timezone] = 'UTC',
+        tz: Union[str, int, float, datetime.timezone, datetime.tzinfo] = 'UTC',
         altitude: float = 0,
         name: str = None
-    ):
+    ) -> None:
 
         self.latitude = latitude
         self.longitude = longitude
 
+        self.tz: Union[str, int, float]
+        self.pytz: datetime.tzinfo  # not used within pvlib
         if isinstance(tz, str):
             self.tz = tz
             self.pytz = pytz.timezone(tz)
@@ -73,11 +75,11 @@ class Location:
             self.tz = 'UTC'
             self.pytz = pytz.UTC
         elif isinstance(tz, datetime.tzinfo):
-            self.tz = tz.zone
+            self.tz = str(tz)
             self.pytz = tz
         elif isinstance(tz, (int, float)):
             self.tz = tz
-            self.pytz = pytz.FixedOffset(tz*60)
+            self.pytz = pytz.FixedOffset(int(tz*60))
         else:
             raise TypeError('Invalid tz specification')
 
