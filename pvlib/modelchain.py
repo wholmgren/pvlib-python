@@ -265,8 +265,8 @@ def get_orientation(strategy, **kwargs):
 
 @dataclass
 class ModelChainResult:
-    _T = TypeVar('T')
-    PerArray = Union[_T, Tuple[_T, ...]]
+    T = TypeVar('T')
+    PerArray = Union[T, Tuple[T, ...]]
     """Type for fields that vary between arrays"""
 
     # these attributes are used in __setattr__ to determine the correct type.
