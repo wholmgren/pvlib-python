@@ -5,12 +5,13 @@ This module contains the Location class.
 # Will Holmgren, University of Arizona, 2014-2016.
 
 import datetime
-import warnings
+from typing import Union
 
 import pandas as pd
 import pytz
 
 from pvlib import solarposition, clearsky, atmosphere, irradiance
+
 
 class Location:
     """
@@ -53,7 +54,14 @@ class Location:
     pvlib.pvsystem.PVSystem
     """
 
-    def __init__(self, latitude, longitude, tz='UTC', altitude=0, name=None):
+    def __init__(
+        self,
+        latitude: float,
+        longitude: float,
+        tz: Union[str, int, float, pytz.timezone] = 'UTC',
+        altitude: float = 0,
+        name: str = None
+    ):
 
         self.latitude = latitude
         self.longitude = longitude
