@@ -1,4 +1,9 @@
-from pvlib.version import __version__  # noqa: F401
+try:
+    from importlib.metadata import version, PackageNotFoundError
+except ImportError:  # Can remove when we require Python > 3.7
+    from importlib_metadata import version, PackageNotFoundError
+
+__version__ = version("pvlib")
 
 from pvlib import (  # noqa: F401
     atmosphere,
