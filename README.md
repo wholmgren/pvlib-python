@@ -95,7 +95,7 @@ of the models and methods developed at the Labs. More information on
 Sandia Labs PV performance modeling programs can be found at
 https://pvpmc.sandia.gov/. We collaborate with the PVLIB MATLAB project,
 but operate independently of it.
-safgsa
+
 
 Documentation
 =============
