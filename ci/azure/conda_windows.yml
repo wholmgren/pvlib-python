@@ -16,6 +16,8 @@ jobs:
         python.version: '38'
       Python39-windows:
         python.version: '39'
+      Python310-windows:
+        python.version: '310'
 
   steps:
   - powershell: Write-Host "##vso[task.prependpath]$env:CONDA\Scripts"

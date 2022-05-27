@@ -20,6 +20,8 @@ jobs:
         python.version: '38'
       Python39:
         python.version: '39'
+      Python310:
+        python.version: '310'
 
   steps:
   - bash: echo "##vso[task.prependpath]/usr/share/miniconda/bin"
