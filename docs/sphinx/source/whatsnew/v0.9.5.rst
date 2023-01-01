@@ -33,6 +33,7 @@ Documentation
 Benchmarking
 ~~~~~~~~~~~~~
 * Added benchmarks for :py:mod:`pvlib.bifacial.infinite_sheds` (:pull:`1627`)
+* Added python 3.9, 3.10, 3.11 to benchmarks suite (:pull:`1629`)
 
 Requirements
 ~~~~~~~~~~~~

@@ -134,6 +134,35 @@
             "ephem": "",
             "numba": ""
         },
+        {
+            "python": "3.9",
+            "build": "",
+            "numpy": "",
+            "pandas": "",
+            "scipy": "",
+            "h5py": "",
+            "ephem": "",
+            "numba": ""
+        },
+        {
+            "python": "3.10",
+            "build": "",
+            "numpy": "",
+            "pandas": "",
+            "scipy": "",
+            "h5py": "",
+            "ephem": "",
+            "numba": ""
+        },
+        {
+            "python": "3.11",
+            "build": "",
+            "numpy": "",
+            "pandas": "",
+            "scipy": "",
+            "h5py": "",
+            "ephem": ""
+        }
     ],
     "exclude": [
         {"python": "dummy"}
