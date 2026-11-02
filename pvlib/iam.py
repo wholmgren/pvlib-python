@@ -28,7 +28,7 @@ _IAM_MODEL_PARAMS = {
 }
 
 
-@_xa.labeled_io()
+@_xa.labeled_io(name=None)
 def ashrae(aoi, b=0.05):
     r"""
     Determine the incidence angle modifier using the ASHRAE transmission
@@ -235,7 +235,7 @@ def physical(aoi, n=1.526, K=4.0, L=0.002, *, n_ar=None):
     return iam
 
 
-@_xa.labeled_io()
+@_xa.labeled_io(name=None)
 def martin_ruiz(aoi, a_r=0.16):
     r'''
     Determine the incidence angle modifier (IAM) using the Martin
@@ -301,9 +301,9 @@ def martin_ruiz(aoi, a_r=0.16):
     xp = _xa.array_namespace(aoi, a_r)
     aoi, a_r = _xa.asarrays(aoi, a_r, xp=xp)
 
-    # a data-dependent check cannot run on a lazy array (e.g. inside
-    # jax.jit) without forcing evaluation, so skip it there
-    if not _xa.is_lazy_array(a_r) and xp.any(a_r <= 0):
+    # a data-dependent check cannot run inside jax.jit, and would force
+    # evaluation of a Dask array, so skip it there
+    if _xa.is_concrete(a_r) and xp.any(a_r <= 0):
         raise ValueError("The parameter 'a_r' cannot be zero or negative.")
 
     with _xa.errstate(xp, invalid='ignore'):

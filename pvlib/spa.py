@@ -1042,13 +1042,38 @@ def _equation_of_time_xp(sun_mean_longitude, geocentric_sun_right_ascension,
     return xp.where(E > 20, E - 1440, xp.where(E < -20, E + 1440, E))
 
 
+# NumPy names whose array API name differs; any other ``np.`` name used in a
+# formula is looked up in the array namespace under the same name
+_NUMPY_TO_ARRAY_API = {
+    'arcsin': 'asin', 'arccos': 'acos', 'arctan': 'atan', 'arctan2': 'atan2',
+    'arcsinh': 'asinh', 'arccosh': 'acosh', 'arctanh': 'atanh',
+    'power': 'pow', 'absolute': 'abs', 'concatenate': 'concat',
+}
+
+
+class _NumpyNames:
+    """NumPy-style names for the array namespace ``xp``, so formula source
+    written for NumPy and numba runs on any array API library."""
+
+    def __init__(self, xp):
+        self._xp = xp
+
+    def __getattr__(self, name):
+        if name in ('radians', 'deg2rad'):
+            return _xa.deg2rad
+        if name in ('degrees', 'rad2deg'):
+            return _xa.rad2deg
+        try:
+            return getattr(self._xp, _NUMPY_TO_ARRAY_API.get(name, name))
+        except AttributeError:
+            raise AttributeError(
+                f'np.{name} is used in an SPA formula but has no array API '
+                'equivalent; add one to spa._NumpyNames') from None
+
+
 @functools.lru_cache
 def _formulas(xp):
-    shim = types.SimpleNamespace(
-        cos=xp.cos, sin=xp.sin, tan=xp.tan, arcsin=xp.asin, arctan=xp.atan,
-        arctan2=xp.atan2, radians=_xa.deg2rad, degrees=_xa.rad2deg,
-        rad2deg=_xa.rad2deg)
-    env = dict(globals(), np=shim)
+    env = dict(globals(), np=_NumpyNames(xp))
     funcs = {}
     for name in _FORMULAS:
         f = globals()[name]
@@ -1075,8 +1100,8 @@ def solar_position_numpy(unixtime, lat, lon, elev, pressure, temp, delta_t,
     ``(T, 1, 1)`` and ``lat``, ``lon`` with shapes ``(1, Y, 1)`` and
     ``(1, 1, X)`` give a time by grid result, with the terms that depend only
     on time computed once per time. ``unixtime`` must be float64: float32
-    seconds since 1970 resolve only 128 s. Note this function will not work
-    if the solar position functions were compiled with numba.
+    seconds since 1970 resolve only 128 s. When numba is in use, this runs
+    the uncompiled Python source of the formulas.
     """
     xp = _xa.array_namespace(unixtime, lat, lon, elev, pressure, temp,
                              delta_t, atmos_refract)
@@ -1389,7 +1414,7 @@ def calculate_deltat(year, month):
     try:
         xp = _xa.array_namespace(year, month)
         # skip the check for lazy arrays, where it would force evaluation
-        if (not _xa.is_lazy_array(year)
+        if (_xa.is_concrete(year)
                 and xp.any((year > 3000) | (year < -1999))):
             warnings.warn(plw)
     except ValueError:

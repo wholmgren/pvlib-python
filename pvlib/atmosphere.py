@@ -132,7 +132,7 @@ def get_absolute_airmass(airmass_relative, pressure=101325.):
     return airmass_absolute
 
 
-@_xa.labeled_io()
+@_xa.labeled_io(name=None)
 def get_relative_airmass(zenith, model='kastenyoung1989'):
     '''
     Calculate relative (not pressure-adjusted) airmass at sea level.

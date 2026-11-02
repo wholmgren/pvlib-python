@@ -11,7 +11,8 @@ from numpy.testing import assert_allclose
 from pvlib import (_array_api as _xa, iam, inverter, irradiance, pvsystem,
                    soiling, solarposition, temperature)
 
-from .test_array_api import BACKENDS, _jax, _torch
+from .test_array_api import (BACKENDS, _jax, _torch,  # noqa: F401
+                             _restore_jax_x64)
 
 
 LAT, LON = 32.2, -110.9
@@ -201,3 +202,64 @@ def test_spa_python_dask_stays_lazy(weather):
                          chunks=100)
     out = solarposition.spa_python(unix, LAT, LON)
     assert all(isinstance(v, da.Array) for v in out.values())
+
+
+def test_hsu_ties_decided_the_same_on_every_library():
+    # rain quantized to 0.1 mm gives window sums equal to the threshold;
+    # whether such a tie cleans must not depend on summation rounding
+    import math
+    rng = np.random.default_rng(1)
+    times = pd.date_range('2020-01-01', periods=20000, freq='1h')
+    rain = pd.Series(np.round(rng.uniform(0, 1, len(times))
+                              * (rng.uniform(size=len(times)) > 0.8), 1),
+                     index=times)
+    t = _xa._datetime_to_number(times, 'unix')
+    start = np.searchsorted(t, t - 3 * 3600., side='right')
+    window_sums = [math.fsum(rain.values[s:i + 1])
+                   for i, s in enumerate(start)]
+    expected_cleaning = np.array(window_sums) >= 0.5 - 1e-9
+    for name, backend_factory in BACKENDS.items():
+        if name == 'dask':
+            continue  # not needed to show the point, and slow here
+        mod, convert = backend_factory()
+        ratio = soiling.hsu(convert(mod, rain.to_numpy()), 0.5, 20., 1e-2,
+                            2e-2, rain_accum_period=3 * 3600.,
+                            times=convert(mod, t))
+        cleaned = _to_numpy(ratio) == 1.0  # all mass removed at cleanings
+        np.testing.assert_array_equal(cleaned, expected_cleaning,
+                                      err_msg=name)
+
+
+def test_hsu_rejects_unsorted_times(weather):
+    with pytest.raises(ValueError, match='increasing'):
+        soiling.hsu(weather['rain'].iloc[::-1], 0.5, 20., 1e-2, 2e-2)
+
+
+def test_hsu_needs_times():
+    rain = pd.Series([0., 1., 0.])  # RangeIndex: no times to take
+    with pytest.raises(ValueError, match='times is required'):
+        soiling.hsu(rain, 0.5, 20., 1e-2, 2e-2)
+    with pytest.raises(ValueError, match='times is required'):
+        soiling.hsu(rain.to_numpy(), 0.5, 20., 1e-2, 2e-2)
+
+
+def test_tz_aware_datetime_series_as_time():
+    times = pd.date_range('2026-12-31 20:00', periods=6, freq='1h',
+                          tz='America/Phoenix')
+    expected = irradiance.get_extra_radiation(times)
+    out = irradiance.get_extra_radiation(pd.Series(times, name='t'))
+    assert_allclose(out.to_numpy(), expected.to_numpy())
+
+
+def test_spa_python_numeric_scalar_is_unix_seconds():
+    t = pd.Timestamp('2026-06-01 19:00', tz='UTC')
+    expected = solarposition.spa_python(t, LAT, LON)
+    out = solarposition.spa_python(_xa._datetime_to_number(t, 'unix'), LAT,
+                                   LON)
+    assert_allclose(float(out['zenith']), expected['zenith'].iloc[0])
+
+
+def test_spa_python_rejects_nanoseconds():
+    times = pd.date_range('2026-06-01', periods=3, freq='1h')
+    with pytest.raises(ValueError, match='seconds since 1970'):
+        solarposition.spa_python(times.asi8, LAT, LON)

@@ -267,16 +267,10 @@ def _spa_python_import(how):
 
 
 def _datetime_to_unixtime(dtindex):
-    # convert a pandas datetime index to unixtime, making sure to handle
-    # different pandas units (ns, us, etc) and time zones correctly
-    if dtindex.tz is not None:
-        # epoch is 1970-01-01 00:00 UTC, but we need to match the input tz
-        # for compatibility with older pandas versions (e.g. v1.3.5)
-        epoch = pd.Timestamp("1970-01-01", tz="UTC").tz_convert(dtindex.tz)
-    else:
-        epoch = pd.Timestamp("1970-01-01")
-
-    return np.array((dtindex - epoch) / pd.Timedelta("1s"))
+    # convert a pandas datetime index to unixtime, handling different pandas
+    # units (ns, us, etc) and time zones. One implementation, shared with
+    # the array API boundary
+    return _xa._datetime_to_number(dtindex, 'unix')
 
 
 def spa_python(time, latitude, longitude,
@@ -359,11 +353,13 @@ def spa_python(time, latitude, longitude,
 
     # Added by Tony Lorenzo (@alorenzo175), University of Arizona, 2015
 
-    # keep accepting lists and scalars of datetimes. Numeric arrays are unix
-    # seconds and xarray time is converted by labeled_io
+    # keep accepting lists and scalars of datetimes. Numbers, scalar or
+    # array, are unix seconds and xarray time is converted by labeled_io
+    numeric = (isinstance(time, (int, float, np.integer, np.floating))
+               and not isinstance(time, bool))
     if not (isinstance(time, pd.DatetimeIndex) or _xa._is_dataarray(time)
-            or (_xa.is_array_api_obj(time)
-                and not _xa._is_datetime_like(time))):
+            or numeric or (_xa.is_array_api_obj(time)
+                           and not _xa._is_datetime_like(time))):
         try:
             time = pd.DatetimeIndex(time)
         except (TypeError, ValueError):
@@ -378,6 +374,13 @@ def _spa_python(time, latitude, longitude, altitude, pressure, temperature,
                 delta_t, atmos_refract, how, numthreads):
     # time is seconds since 1970-01-01 UTC, from labeled_io
     unixtime = time
+    xp = _xa.array_namespace(unixtime)
+    # 2e11 s is the year 8300; nanoseconds (e.g. DatetimeIndex.asi8) are far
+    # larger for any time after 1970-01-01 00:03:20
+    if _xa.is_concrete(unixtime) and xp.any(xp.abs(
+            _xa.asarrays(unixtime, xp=xp)[0]) > 2e11):
+        raise ValueError('numeric time must be seconds since 1970-01-01 UTC; '
+                         'these look like milli-, micro- or nanoseconds')
     lat = latitude
     lon = longitude
     elev = altitude
@@ -388,7 +391,6 @@ def _spa_python(time, latitude, longitude, altitude, pressure, temperature,
     spa = _spa_python_import(how)
 
     if delta_t is None:
-        xp = _xa.array_namespace(unixtime)
         unixtime_, = _xa.asarrays(unixtime, xp=xp)
         year, month, _, _ = _xa.unix_to_civil(unixtime_, xp)
         delta_t = spa.calculate_deltat(year, month)

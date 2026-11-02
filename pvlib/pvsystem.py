@@ -3050,7 +3050,8 @@ def scale_voltage_current_power(data, voltage=1, current=1):
     return df_sorted
 
 
-@_xa.labeled_io()
+@_xa.labeled_io(name=lambda arguments: (
+    None if arguments['k'] is not None else _xa.labeled_io.INFER))
 def pvwatts_dc(effective_irradiance, temp_cell, pdc0, gamma_pdc, temp_ref=25.,
                k=None, cap_adjustment=False):
     r"""

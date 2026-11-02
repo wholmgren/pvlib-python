@@ -250,6 +250,7 @@ def sapm_module(poa_global, temp_air, wind_speed, a, b):
     return poa_global * xp.exp(a + b * wind_speed) + temp_air
 
 
+@_xa.labeled_io()
 def sapm_cell_from_module(module_temperature, poa_global, deltaT,
                           irrad_ref=1000.):
     r'''
@@ -329,6 +330,10 @@ def sapm_cell_from_module(module_temperature, poa_global, deltaT,
     sapm_cell
     sapm_module
     '''
+    xp = _xa.array_namespace(module_temperature, poa_global, deltaT,
+                             irrad_ref)
+    module_temperature, poa_global, deltaT, irrad_ref = _xa.asarrays(
+        module_temperature, poa_global, deltaT, irrad_ref, xp=xp)
     return module_temperature + (poa_global / irrad_ref) * deltaT
 
 

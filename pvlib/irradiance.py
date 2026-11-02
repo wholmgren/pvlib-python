@@ -119,7 +119,7 @@ def get_extra_radiation(datetime_or_doy, solar_constant=1366.1,
     return Ea
 
 
-@_xa.labeled_io(time={'datetime_or_doy': 'doy'})
+@_xa.labeled_io(name=None, time={'datetime_or_doy': 'doy'})
 def _extra_radiation_from_doy(datetime_or_doy, solar_constant, method):
     # datetime_or_doy is the day of year here, from labeled_io
     xp = _xa.array_namespace(datetime_or_doy, solar_constant)

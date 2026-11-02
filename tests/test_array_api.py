@@ -2,6 +2,8 @@
 Run array API ported functions on several array libraries and check that the
 array type comes back unchanged and that results match NumPy.
 """
+import sys
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -9,6 +11,18 @@ from numpy.testing import assert_allclose
 
 from pvlib import (atmosphere, iam, inverter, irradiance, pvsystem,
                    temperature, tools)
+
+
+@pytest.fixture(autouse=True)
+def _restore_jax_x64():
+    # _jax enables float64, a process-wide JAX setting; put it back so that
+    # later tests see JAX's default
+    jax = sys.modules.get('jax')
+    before = bool(jax.config.jax_enable_x64) if jax else False
+    yield
+    jax = sys.modules.get('jax')
+    if jax is not None:
+        jax.config.update('jax_enable_x64', before)
 
 
 def _jax():
@@ -181,3 +195,49 @@ def test_torch_inverter_gradient_finite_at_zero_power():
                        requires_grad=True)
     inverter.pvwatts(pdc, 120.).sum().backward()
     assert torch.isfinite(pdc.grad).all()
+
+
+def test_device_follows_largest_array():
+    # a 0-d CPU tensor (torch.tensor(30.)) must not pull data off its device;
+    # PyTorch's meta device stands in for a GPU here
+    torch = _torch()
+    zen = torch.empty(3, dtype=torch.float64, device='meta')
+    out = irradiance.aoi(torch.tensor(30., dtype=torch.float64), 180., zen,
+                         torch.empty(3, dtype=torch.float64, device='meta'))
+    assert out.device.type == 'meta'
+
+
+def test_martin_ruiz_validates_eager_jax_but_not_traced():
+    jnp = _jax()
+    import jax
+    with pytest.raises(ValueError, match='a_r'):
+        iam.martin_ruiz(jnp.asarray([10.]), a_r=jnp.asarray(-1.))
+    # inside jit the values are unknown, so the check is skipped
+    jax.jit(lambda a_r: iam.martin_ruiz(jnp.asarray([10.]), a_r))(
+        jnp.asarray(0.16))
+
+
+def test_xarray_joins_like_xarray_arithmetic():
+    xr = pytest.importorskip('xarray')
+    zen = xr.DataArray([10., 20., 30.], dims='t', coords={'t': [0, 1, 2]})
+    azi = xr.DataArray([90., 100., 110.], dims='t', coords={'t': [1, 2, 3]})
+    out = irradiance.aoi(30., 180., zen, azi)
+    assert list(out['t'].values) == list((zen + azi)['t'].values) == [1, 2]
+
+
+def test_spa_formula_numpy_names_have_array_api_equivalents():
+    # spa formulas are written with np. for numba; every np name they use
+    # must resolve on a strictly conforming namespace
+    import ast
+    import inspect
+    from pvlib import spa
+    xps = pytest.importorskip('array_api_strict')
+    names = spa._NumpyNames(xps)
+    for formula in spa._FORMULAS:
+        func = getattr(getattr(spa, formula), 'py_func', getattr(spa, formula))
+        for node in ast.walk(ast.parse(inspect.getsource(func))):
+            if (isinstance(node, ast.Attribute)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == 'np'):
+                assert callable(getattr(names, node.attr)), (formula,
+                                                             node.attr)

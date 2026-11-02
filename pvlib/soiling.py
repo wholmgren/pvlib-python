@@ -9,6 +9,8 @@ import pandas as pd
 from pvlib.tools import cosd
 from pvlib import _array_api as _xa
 
+_RAIN_TOLERANCE = 1e-9  # mm, see hsu
+
 
 @_xa.labeled_io(name=None, time={'times': 'unix'},
                 timedelta=('rain_accum_period',), index_time='times')
@@ -97,12 +99,20 @@ def hsu(rainfall, cleaning_threshold, surface_tilt, pm2_5, pm10,
     rainfall, times, surface_tilt, pm2_5, pm10 = _xa.asarrays(
         rainfall, times, surface_tilt, pm2_5, pm10, xp=xp)
 
+    # pandas rolling raises for an unsorted index; the window sums below
+    # would be silently wrong
+    if _xa.is_concrete(times) and xp.any(xp.diff(times) < 0):
+        raise ValueError('times must be increasing')
+
     # accumulate rainfall into periods for comparison with threshold.
     # rolling(closed='right') skips missing values
     rain = xp.where(xp.isnan(rainfall), 0., rainfall)
     accum_rain = _xa.rolling_sum(rain, times, rain_accum_period, xp=xp)
-    # cleaning is True for intervals with rainfall greater than threshold
-    cleaning = accum_rain >= cleaning_threshold
+    # cleaning is True for intervals with rainfall greater than threshold.
+    # A sum that equals the threshold (quantized rain) carries rounding error
+    # that differs between summation methods, pandas' included, so count
+    # sums within 1e-9 mm of it as reaching it
+    cleaning = accum_rain >= cleaning_threshold - _RAIN_TOLERANCE
 
     # determine the time intervals in seconds (dt_sec), assuming that the
     # interval prior to the first value is equal in length to the first

@@ -29,13 +29,13 @@ import contextlib
 import datetime
 import functools
 import inspect
+import math
 
 import numpy as np
 import pandas as pd
 import array_api_compat
 import array_api_compat.numpy as np_compat
-from array_api_compat import is_array_api_obj, is_lazy_array  # noqa: F401
-import array_api_extra as xpx  # noqa: F401
+from array_api_compat import is_array_api_obj, is_lazy_array
 
 
 _SCALAR_TYPES = (bool, int, float, complex, np.generic)
@@ -66,21 +66,48 @@ def asarrays(*xs, xp):
     Convert ``xs`` to floating-point arrays with a common dtype and device.
 
     The dtype is the promoted dtype of the floating-point array inputs, or
-    float64 if there are none. ``None`` passes through.
+    float64 if there are none. The device is that of the largest array, so a
+    0-d CPU tensor does not pull GPU data to the CPU. Masked values of NumPy
+    masked arrays become NaN, so their fill values never enter a calculation
+    (:py:func:`labeled_io` restores the mask). ``None`` passes through.
     """
     if xp is np_compat:
         floats = [x.dtype for x in xs
                   if isinstance(x, np.ndarray) and x.dtype.kind == 'f']
         dtype = np.result_type(*floats) if floats else np.float64
-        return tuple(None if x is None else np.asarray(x, dtype=dtype)
+        return tuple(None if x is None else _np_asarray(x, dtype)
                      for x in xs)
     arrays = [x for x in xs if is_array_api_obj(x)
               and not isinstance(x, np.generic)]
     floats = [x for x in arrays if xp.isdtype(x.dtype, 'real floating')]
     dtype = xp.result_type(*floats) if floats else xp.float64
-    device = array_api_compat.device(arrays[0]) if arrays else None
+    device = (array_api_compat.device(max(arrays, key=_size)) if arrays
+              else None)
     return tuple(None if x is None else
                  xp.asarray(x, dtype=dtype, device=device) for x in xs)
+
+
+def _np_asarray(x, dtype):
+    if isinstance(x, np.ma.MaskedArray):
+        return np.ma.filled(x.astype(dtype), np.nan)
+    return np.asarray(x, dtype=dtype)
+
+
+def _size(x):
+    # None for lazy arrays of unknown size, which are likely large
+    n = array_api_compat.size(x)
+    return math.inf if n is None else n
+
+
+def is_concrete(x):
+    """
+    True if the values of ``x`` can be read now, so data-dependent checks
+    can run: not a JAX tracer (inside ``jax.jit``) or a lazy Dask array.
+    """
+    if array_api_compat.is_jax_array(x):
+        import jax
+        return not isinstance(x, jax.core.Tracer)
+    return not is_lazy_array(x)
 
 
 def errstate(xp, **kwargs):
@@ -92,10 +119,14 @@ def errstate(xp, **kwargs):
 
 def deg2rad(x):
     # np.radians multiplies by pi/180, so results match it bit for bit
+    if isinstance(x, (list, tuple)):
+        x = np.asarray(x)
     return x * (np.pi / 180)
 
 
 def rad2deg(x):
+    if isinstance(x, (list, tuple)):
+        x = np.asarray(x)
     return x * (180 / np.pi)
 
 
@@ -191,6 +222,12 @@ def rolling_sum(x, t, window, xp):
     ``t`` is 1-D, increasing, in seconds; ``window`` is in seconds. Works for
     irregular timestamps and has no data-dependent shapes, so it also runs
     inside ``jax.jit``.
+
+    Sums are differences of a running total, so their absolute error grows
+    with the total (about 1e-16 times it), where pandas' error grows with the
+    window sum. Neither is exact, so a comparison with a threshold that a
+    sum can equal (quantized rainfall, say) needs a tolerance to decide ties
+    the same way on every library.
     """
     n = t.shape[0]
     total = xp.cumulative_sum(x, axis=-1, include_initial=True)
@@ -218,8 +255,8 @@ def where_safe(cond, x, f, fill_value, xp, safe=1.):
     ``f`` sees ``safe`` in place of ``x`` where ``cond`` is False, so values
     that ``cond`` excludes (a zero divisor, a zero base with a fractional
     power) can make neither the result nor its derivative inf or NaN. This
-    "double where" is what autodiff needs; ``xpx.apply_where`` evaluates
-    ``f`` everywhere under ``jax.jit``.
+    "double where" is what autodiff needs; ``array_api_extra.apply_where``
+    evaluates ``f`` everywhere under ``jax.jit``.
     """
     return xp.where(cond, f(xp.where(cond, x, safe)), fill_value)
 
@@ -246,7 +283,7 @@ def erf(x, xp):
 
 # --- labeled containers -----------------------------------------------------
 
-def _unwrap(x, found):
+def _unwrap(x, found, masks):
     if isinstance(x, pd.Series):
         found.append(x)
         return x.to_numpy()
@@ -255,7 +292,26 @@ def _unwrap(x, found):
         return {k: v.to_numpy() for k, v in x.items()}
     if isinstance(x, pd.DatetimeIndex):
         found.append(x)
+    if isinstance(x, np.ma.MaskedArray):
+        masks.append(np.ma.getmaskarray(x))
+        return np.ma.filled(x.astype(np.result_type(x.dtype, np.float64)),
+                            np.nan)
     return x
+
+
+def _wrap_masked(out, masks):
+    """Mask outputs wherever any masked input was masked, as ufuncs do."""
+    if isinstance(out, dict):
+        return {k: _wrap_masked(v, masks) for k, v in out.items()}
+    if isinstance(out, tuple):
+        return tuple(_wrap_masked(o, masks) for o in out)
+    if isinstance(out, (np.ndarray, np.generic)):
+        shape = np.shape(out)
+        mask = np.zeros(shape, dtype=bool)
+        for m in masks:
+            mask = mask | np.broadcast_to(m, shape)
+        return np.ma.masked_array(out, mask=mask)
+    return out
 
 
 def _wrap_pandas(out, index, name):
@@ -281,7 +337,9 @@ def _call_xarray(func, arguments, call, name):
     import xarray as xr
 
     keys = [k for k, v in arguments.items() if _is_dataarray(v)]
-    aligned = xr.align(*(arguments[k] for k in keys), join='outer')
+    # join as xarray arithmetic does (inner by default)
+    aligned = xr.align(*(arguments[k] for k in keys),
+                       join=xr.get_options()['arithmetic_join'])
     dims, sizes = [], {}
     for da in aligned:
         dims += [d for d in da.dims if d not in dims]
@@ -345,12 +403,16 @@ def labeled_io(name=_INFER, time=None, timedelta=(), index_time=None):
     and replaced by their underlying arrays, which may be from any array
     library. An array result becomes a DataArray and a dict result a Dataset.
 
+    NumPy masked arrays are passed on with NaN at masked positions, and array
+    results are masked wherever any masked argument was.
+
     Parameters
     ----------
-    name : str or None, optional
+    name : str, None, or callable, optional
         Name of a Series or DataArray result. By default it is the name shared
         by all the labeled arguments, or None if they differ, as in pandas
-        arithmetic.
+        arithmetic. A callable gets the bound arguments and returns the name,
+        or ``labeled_io.INFER`` for the default.
     time : dict, optional
         Maps parameter names to the numeric time the function works with,
         ``'unix'`` or ``'doy'``. Datetime-like arguments are converted;
@@ -359,18 +421,20 @@ def labeled_io(name=_INFER, time=None, timedelta=(), index_time=None):
     timedelta : tuple of str, optional
         Parameters converted from Timedelta-like to float seconds.
     index_time : str, optional
-        A parameter that, when None, is filled with the index of the first
-        Series argument. For functions whose pandas API takes time from an
-        index. It should also appear in ``time``.
+        A parameter that, when None, is filled with the DatetimeIndex of the
+        first Series argument. For functions whose pandas API takes time from
+        an index. It should also appear in ``time``. A ValueError is raised
+        if it is None and there is no DatetimeIndex to take it from.
     """
     time = time or {}
 
     def decorator(func):
         sig = inspect.signature(func)
-        simple = not (time or timedelta or index_time)
+        simple = not (time or timedelta or index_time or callable(name))
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            found, masks = [], []
             if simple:  # fast path: no binding to the signature needed
                 if (any(_is_dataarray(a) for a in args)
                         or any(_is_dataarray(v) for v in kwargs.values())):
@@ -378,20 +442,19 @@ def labeled_io(name=_INFER, time=None, timedelta=(), index_time=None):
                     return _call_xarray(
                         func, bound.arguments,
                         lambda: func(*bound.args, **bound.kwargs), name)
-                found = []
-                args = [_unwrap(a, found) for a in args]
-                kwargs = {k: _unwrap(v, found) for k, v in kwargs.items()}
+                args = [_unwrap(a, found, masks) for a in args]
+                kwargs = {k: _unwrap(v, found, masks)
+                          for k, v in kwargs.items()}
                 out = func(*args, **kwargs)
                 values = list(args) + list(kwargs.values())
+                out_name = name
             else:
                 bound = sig.bind(*args, **kwargs)
                 bound.apply_defaults()  # defaults may need converting too
                 arguments = bound.arguments
+                out_name = name(arguments) if callable(name) else name
                 if index_time and arguments.get(index_time) is None:
-                    series = [v for v in arguments.values()
-                              if isinstance(v, pd.Series)]
-                    if series:
-                        arguments[index_time] = series[0].index
+                    _fill_index_time(arguments, index_time)
                 for k in timedelta:
                     if k in arguments:
                         arguments[k] = _timedelta_to_seconds(arguments[k])
@@ -405,27 +468,41 @@ def labeled_io(name=_INFER, time=None, timedelta=(), index_time=None):
                                 dims=v.dims, coords=v.coords, name=v.name)
                     return _call_xarray(
                         func, arguments,
-                        lambda: func(*bound.args, **bound.kwargs), name)
-                found = []
+                        lambda: func(*bound.args, **bound.kwargs), out_name)
                 for k, v in arguments.items():
-                    arguments[k] = _unwrap(v, found)
-                for k, kind in time.items():
-                    v = arguments.get(k)
-                    if _is_datetime_like(v):
-                        arguments[k] = _datetime_to_number(v, kind)
+                    # convert time first: unwrapping a tz-aware Series of
+                    # datetimes would give an object array of Timestamps
+                    if k in time and _is_datetime_like(v):
+                        if isinstance(v, (pd.Series, pd.DatetimeIndex)):
+                            found.append(v)
+                        arguments[k] = _datetime_to_number(v, time[k])
+                    else:
+                        arguments[k] = _unwrap(v, found, masks)
                 out = func(*bound.args, **bound.kwargs)
                 values = list(arguments.values())
             if not found:
+                if masks:
+                    return _wrap_masked(out, masks)
                 if _all_scalar(values):
                     out = _scalarize(out)
                 return out
-            if name is _INFER:
+            if out_name is _INFER:
                 names = {x.name for x in found if isinstance(x, pd.Series)}
                 out_name = names.pop() if len(names) == 1 else None
-            else:
-                out_name = name
             index = found[0] if isinstance(found[0], pd.Index) \
                 else found[0].index
             return _wrap_pandas(out, index, out_name)
         return wrapper
     return decorator
+
+
+labeled_io.INFER = _INFER
+
+
+def _fill_index_time(arguments, index_time):
+    series = [v for v in arguments.values() if isinstance(v, pd.Series)]
+    if series and isinstance(series[0].index, pd.DatetimeIndex):
+        arguments[index_time] = series[0].index
+    else:
+        raise ValueError(f'{index_time} is required unless the data are '
+                         'Series with a DatetimeIndex')
