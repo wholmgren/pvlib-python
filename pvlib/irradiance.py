@@ -13,6 +13,7 @@ from scipy.interpolate import splev
 from scipy.optimize import bisect
 
 from pvlib import atmosphere, solarposition, tools
+from pvlib import _array_api as _xa
 import pvlib  # used to avoid dni name collision in complete_irradiance
 
 from pvlib._deprecation import pvlibDeprecationWarning, deprecated
@@ -92,20 +93,16 @@ def get_extra_radiation(datetime_or_doy, solar_constant=1366.1,
        Revised 2008. :doi:`10.2172/15003974`
     """
 
+    method = method.lower()
+    if method in ('asce', 'spencer'):
+        # these need only the day of year, so they run on any array library
+        return _extra_radiation_from_doy(datetime_or_doy, solar_constant,
+                                         method)
+
     to_doy, to_datetimeindex, to_output = \
         _handle_extra_radiation_types(datetime_or_doy, epoch_year)
 
-    # consider putting asce and spencer methods in their own functions
-    method = method.lower()
-    if method == 'asce':
-        B = solarposition._calculate_simple_day_angle(to_doy(datetime_or_doy),
-                                                      offset=0)
-        RoverR0sqrd = 1 + 0.033 * np.cos(B)
-    elif method == 'spencer':
-        B = solarposition._calculate_simple_day_angle(to_doy(datetime_or_doy))
-        RoverR0sqrd = (1.00011 + 0.034221 * np.cos(B) + 0.00128 * np.sin(B) +
-                       0.000719 * np.cos(2 * B) + 7.7e-05 * np.sin(2 * B))
-    elif method == 'pyephem':
+    if method == 'pyephem':
         times = to_datetimeindex(datetime_or_doy)
         RoverR0sqrd = solarposition.pyephem_earthsun_distance(times) ** (-2)
     elif method == 'nrel':
@@ -120,6 +117,22 @@ def get_extra_radiation(datetime_or_doy, solar_constant=1366.1,
     Ea = to_output(Ea)
 
     return Ea
+
+
+@_xa.labeled_io(time={'datetime_or_doy': 'doy'})
+def _extra_radiation_from_doy(datetime_or_doy, solar_constant, method):
+    # datetime_or_doy is the day of year here, from labeled_io
+    xp = _xa.array_namespace(datetime_or_doy, solar_constant)
+    doy, solar_constant = _xa.asarrays(datetime_or_doy, solar_constant,
+                                       xp=xp)
+    if method == 'asce':
+        B = solarposition._calculate_simple_day_angle(doy, offset=0)
+        RoverR0sqrd = 1 + 0.033 * xp.cos(B)
+    else:  # spencer
+        B = solarposition._calculate_simple_day_angle(doy)
+        RoverR0sqrd = (1.00011 + 0.034221 * xp.cos(B) + 0.00128 * xp.sin(B) +
+                       0.000719 * xp.cos(2 * B) + 7.7e-05 * xp.sin(2 * B))
+    return solar_constant * RoverR0sqrd
 
 
 def _handle_extra_radiation_types(datetime_or_doy, epoch_year):
@@ -162,6 +175,7 @@ def _handle_extra_radiation_types(datetime_or_doy, epoch_year):
     return to_doy, to_datetimeindex, to_output
 
 
+@_xa.labeled_io('aoi_projection')
 def aoi_projection(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth):
     """
     Calculates the dot product of the sun position unit vector and the surface
@@ -193,22 +207,23 @@ def aoi_projection(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth):
         See :term:`aoi_projection`.
     """
 
+    xp = _xa.array_namespace(surface_tilt, surface_azimuth,
+                             solar_zenith, solar_azimuth)
+    surface_tilt, surface_azimuth, solar_zenith, solar_azimuth = _xa.asarrays(
+        surface_tilt, surface_azimuth, solar_zenith, solar_azimuth, xp=xp)
+
     projection = (
         tools.cosd(surface_tilt) * tools.cosd(solar_zenith) +
         tools.sind(surface_tilt) * tools.sind(solar_zenith) *
         tools.cosd(solar_azimuth - surface_azimuth))
 
     # GH 1185
-    projection = np.clip(projection, -1, 1)
-
-    try:
-        projection.name = 'aoi_projection'
-    except AttributeError:
-        pass
+    projection = xp.clip(projection, -1., 1.)
 
     return projection
 
 
+@_xa.labeled_io('aoi')
 def aoi(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth):
     """
     Calculates the angle of incidence of the solar vector on a surface.
@@ -235,16 +250,12 @@ def aoi(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth):
 
     projection = aoi_projection(surface_tilt, surface_azimuth,
                                 solar_zenith, solar_azimuth)
-    aoi_value = np.rad2deg(np.arccos(projection))
-
-    try:
-        aoi_value.name = 'aoi'
-    except AttributeError:
-        pass
+    aoi_value = tools.acosd(projection)
 
     return aoi_value
 
 
+@_xa.labeled_io()
 def beam_component(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth,
                    dni):
     """
@@ -268,13 +279,17 @@ def beam_component(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth,
     beam : numeric
         Beam component. [Wm⁻²]
     """
+    xp = _xa.array_namespace(surface_tilt, surface_azimuth, solar_zenith,
+                             solar_azimuth, dni)
+    dni, = _xa.asarrays(dni, xp=xp)
     beam = dni * aoi_projection(surface_tilt, surface_azimuth,
                                 solar_zenith, solar_azimuth)
-    beam = np.maximum(beam, 0)
+    beam = xp.maximum(beam, 0.)
 
     return beam
 
 
+@_xa.labeled_io()
 def get_total_irradiance(surface_tilt, surface_azimuth,
                          solar_zenith, solar_azimuth,
                          dni, ghi, dhi, dni_extra=None, airmass=None,
@@ -500,6 +515,7 @@ def get_sky_diffuse(surface_tilt, surface_azimuth,
     return sky
 
 
+@_xa.labeled_io()
 def poa_components(aoi, dni, poa_sky_diffuse, poa_ground_diffuse):
     r'''
     Determine in-plane irradiance components.
@@ -548,17 +564,18 @@ def poa_components(aoi, dni, poa_sky_diffuse, poa_ground_diffuse):
     Negative beam irradiation due to AOI > 90° or AOI < 0° is set to zero.
     '''
 
+    # a DataFrame poa_sky_diffuse arrives here as a dict, see pandas_io
     if isinstance(poa_sky_diffuse, dict):
         sky_components = poa_sky_diffuse.copy()
-        total_poa_sky_diffuse = sky_components.pop('poa_sky_diffuse')
-    elif isinstance(poa_sky_diffuse, pd.DataFrame):
-        sky_components = poa_sky_diffuse.to_dict(orient='series')
         total_poa_sky_diffuse = sky_components.pop('poa_sky_diffuse')
     else:
         sky_components = {}
         total_poa_sky_diffuse = poa_sky_diffuse
 
-    poa_direct = np.maximum(dni * np.cos(np.radians(aoi)), 0)
+    xp = _xa.array_namespace(aoi, dni, total_poa_sky_diffuse,
+                             poa_ground_diffuse)
+    aoi, dni = _xa.asarrays(aoi, dni, xp=xp)
+    poa_direct = xp.maximum(dni * tools.cosd(aoi), 0.)
     poa_diffuse = total_poa_sky_diffuse + poa_ground_diffuse
     poa_global = poa_direct + poa_diffuse
 
@@ -571,12 +588,10 @@ def poa_components(aoi, dni, poa_sky_diffuse, poa_ground_diffuse):
         **sky_components
     }
 
-    if isinstance(poa_direct, pd.Series):
-        irrads = pd.DataFrame(irrads)
-
     return irrads
 
 
+@_xa.labeled_io('poa_ground_diffuse')
 def get_ground_diffuse(surface_tilt, ghi, albedo=.25, surface_type=None):
     r'''
     Estimate diffuse irradiance on a tilted surface from ground reflections.
@@ -635,19 +650,18 @@ def get_ground_diffuse(surface_tilt, ghi, albedo=.25, surface_type=None):
     if surface_type is not None:
         albedo = pvlib.albedo.SURFACE_ALBEDOS[surface_type]
 
+    xp = _xa.array_namespace(surface_tilt, ghi, albedo)
+    surface_tilt, ghi, albedo = _xa.asarrays(surface_tilt, ghi, albedo, xp=xp)
+
     poa_ground_diffuse = (
         ghi * albedo *
-        (1 - np.cos(np.radians(surface_tilt))) * 0.5
+        (1 - tools.cosd(surface_tilt)) * 0.5
     )
-
-    try:
-        poa_ground_diffuse.name = 'poa_ground_diffuse'
-    except AttributeError:
-        pass
 
     return poa_ground_diffuse
 
 
+@_xa.labeled_io()
 def isotropic(surface_tilt, dhi, return_components=False):
     r'''
     Determine diffuse irradiance from the sky on a tilted surface using
@@ -708,6 +722,9 @@ def isotropic(surface_tilt, dhi, return_components=False):
        Energy vol. 201. pp. 8-12
        :doi:`10.1016/j.solener.2020.02.067`
     '''
+    xp = _xa.array_namespace(surface_tilt, dhi)
+    surface_tilt, dhi = _xa.asarrays(surface_tilt, dhi, xp=xp)
+
     poa_sky_diffuse = dhi * (1 + tools.cosd(surface_tilt)) * 0.5
 
     if return_components:
@@ -715,9 +732,6 @@ def isotropic(surface_tilt, dhi, return_components=False):
             'poa_sky_diffuse': poa_sky_diffuse,
             'poa_isotropic': poa_sky_diffuse
         }
-
-        if isinstance(poa_sky_diffuse, pd.Series):
-            diffuse_components = pd.DataFrame(diffuse_components)
 
         return diffuse_components
     else:
@@ -815,6 +829,7 @@ def klucher(surface_tilt, surface_azimuth, dhi, ghi, solar_zenith,
     return poa_sky_diffuse
 
 
+@_xa.labeled_io()
 def haydavies(surface_tilt, surface_azimuth, dhi, dni, dni_extra,
               solar_zenith=None, solar_azimuth=None, projection_ratio=None,
               return_components=False):
@@ -918,13 +933,19 @@ def haydavies(surface_tilt, surface_azimuth, dhi, dni, dni_extra,
        :doi:`10.1016/j.solener.2006.03.009`
     '''
 
+    xp = _xa.array_namespace(surface_tilt, surface_azimuth, dhi, dni,
+                             dni_extra, solar_zenith, solar_azimuth,
+                             projection_ratio)
+    surface_tilt, dhi, dni, dni_extra, projection_ratio = _xa.asarrays(
+        surface_tilt, dhi, dni, dni_extra, projection_ratio, xp=xp)
+
     # if necessary, calculate ratio of titled and horizontal beam irradiance
     if projection_ratio is None:
         cos_tt = aoi_projection(surface_tilt, surface_azimuth,
                                 solar_zenith, solar_azimuth)
-        cos_tt = np.maximum(cos_tt, 0)  # GH 526
+        cos_tt = xp.maximum(cos_tt, 0.)  # GH 526
         cos_solar_zenith = tools.cosd(solar_zenith)
-        Rb = cos_tt / np.maximum(cos_solar_zenith, 0.01745)  # GH 432
+        Rb = cos_tt / xp.maximum(cos_solar_zenith, 0.01745)  # GH 432
     else:
         Rb = projection_ratio
 
@@ -935,8 +956,8 @@ def haydavies(surface_tilt, surface_azimuth, dhi, dni, dni_extra,
     term1 = 1 - AI
     term2 = 0.5 * (1 + tools.cosd(surface_tilt))
 
-    poa_isotropic = np.maximum(dhi * term1 * term2, 0)
-    poa_circumsolar = np.maximum(dhi * (AI * Rb), 0)
+    poa_isotropic = xp.maximum(dhi * term1 * term2, 0.)
+    poa_circumsolar = xp.maximum(dhi * (AI * Rb), 0.)
     poa_sky_diffuse = poa_isotropic + poa_circumsolar
 
     if return_components:
@@ -946,8 +967,6 @@ def haydavies(surface_tilt, surface_azimuth, dhi, dni, dni_extra,
             'poa_circumsolar': poa_circumsolar
         }
 
-        if isinstance(poa_sky_diffuse, pd.Series):
-            diffuse_components = pd.DataFrame(diffuse_components)
         return diffuse_components
     else:
         return poa_sky_diffuse
@@ -1805,6 +1824,7 @@ def clearsky_index(ghi, ghi_clear, max_clearsky_index=2.0):
     return clearsky_index
 
 
+@_xa.labeled_io()
 def clearness_index(ghi, solar_zenith, extra_radiation, min_cos_zenith=0.065,
                     max_clearness_index=2.0):
     """
@@ -1846,15 +1866,19 @@ def clearness_index(ghi, solar_zenith, extra_radiation, min_cos_zenith=0.065,
            Report No. SERI/TR-215-3087, Golden, CO: Solar Energy Research
            Institute, 1987.
     """
+    xp = _xa.array_namespace(ghi, solar_zenith, extra_radiation)
+    ghi, solar_zenith, extra_radiation = _xa.asarrays(
+        ghi, solar_zenith, extra_radiation, xp=xp)
+
     cos_zenith = tools.cosd(solar_zenith)
-    I0h = extra_radiation * np.maximum(cos_zenith, min_cos_zenith)
+    I0h = extra_radiation * xp.maximum(cos_zenith, min_cos_zenith)
     # consider adding
     # with np.errstate(invalid='ignore', divide='ignore'):
     # to kt calculation, but perhaps it's good to allow these
     # warnings to the users that override min_cos_zenith
     kt = ghi / I0h
-    kt = np.maximum(kt, 0)
-    kt = np.minimum(kt, max_clearness_index)
+    kt = xp.maximum(kt, 0.)
+    kt = xp.minimum(kt, max_clearness_index)
     return kt
 
 
@@ -2735,6 +2759,7 @@ def _gti_dirint_gte_90_kt_prime(aoi, solar_zenith, solar_azimuth, times,
     return kt_prime_gte_90
 
 
+@_xa.labeled_io(time={'datetime_or_doy': 'doy'})
 def erbs(ghi, zenith, datetime_or_doy, min_cos_zenith=0.065, max_zenith=87):
     r"""
     Estimate DNI and DHI from GHI using the Erbs model.
@@ -2797,7 +2822,11 @@ def erbs(ghi, zenith, datetime_or_doy, min_cos_zenith=0.065, max_zenith=87):
     boland
     """
 
-    dni_extra = get_extra_radiation(datetime_or_doy)
+    # datetime_or_doy is the day of year here, from labeled_io
+    xp = _xa.array_namespace(ghi, zenith, datetime_or_doy)
+    ghi, zenith, doy = _xa.asarrays(ghi, zenith, datetime_or_doy, xp=xp)
+
+    dni_extra = get_extra_radiation(doy)
 
     kt = clearness_index(ghi, zenith, dni_extra, min_cos_zenith=min_cos_zenith,
                          max_clearness_index=1)
@@ -2806,29 +2835,26 @@ def erbs(ghi, zenith, datetime_or_doy, min_cos_zenith=0.065, max_zenith=87):
     df = 1 - 0.09*kt
 
     # For Kt > 0.22 and Kt <= 0.8, set the diffuse fraction
-    df = np.where((kt > 0.22) & (kt <= 0.8),
+    df = xp.where((kt > 0.22) & (kt <= 0.8),
                   0.9511 - 0.1604*kt + 4.388*kt**2 -
                   16.638*kt**3 + 12.336*kt**4,
                   df)
 
     # For Kt > 0.8, set the diffuse fraction
-    df = np.where(kt > 0.8, 0.165, df)
+    df = xp.where(kt > 0.8, 0.165, df)
 
     dhi = df * ghi
 
     dni = (ghi - dhi) / tools.cosd(zenith)
     bad_values = (zenith > max_zenith) | (ghi < 0) | (dni < 0)
-    dni = np.where(bad_values, 0, dni)
+    dni = xp.where(bad_values, 0., dni)
     # ensure that closure relationship remains valid
-    dhi = np.where(bad_values, ghi, dhi)
+    dhi = xp.where(bad_values, ghi, dhi)
 
     data = {}
     data['dni'] = dni
     data['dhi'] = dhi
     data['kt'] = kt
-
-    if isinstance(datetime_or_doy, pd.DatetimeIndex):
-        data = pd.DataFrame(data, index=datetime_or_doy)
 
     return data
 

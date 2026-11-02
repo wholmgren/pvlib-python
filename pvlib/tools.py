@@ -12,7 +12,11 @@ import pandas as pd
 from packaging.version import Version
 import zoneinfo
 
+from pvlib import _array_api as _xa
 
+
+# no labeled_io here: NumPy ufuncs already keep pandas and xarray types,
+# and the decorator would add overhead to every internal call
 def cosd(angle):
     """
     Trigonometric cosine with angle input in degrees.
@@ -27,7 +31,8 @@ def cosd(angle):
     result : float or array-like
         Cosine of the angle
     """
-    res = np.cos(np.radians(angle))
+    xp = _xa.array_namespace(angle)
+    res = xp.cos(_xa.deg2rad(angle))
     return res
 
 
@@ -45,7 +50,8 @@ def sind(angle):
     result : float
         Sin of the angle
     """
-    res = np.sin(np.radians(angle))
+    xp = _xa.array_namespace(angle)
+    res = xp.sin(_xa.deg2rad(angle))
     return res
 
 
@@ -63,7 +69,8 @@ def tand(angle):
     result : float
         Tan of the angle
     """
-    res = np.tan(np.radians(angle))
+    xp = _xa.array_namespace(angle)
+    res = xp.tan(_xa.deg2rad(angle))
     return res
 
 
@@ -81,7 +88,8 @@ def asind(number):
     result : float
         arcsin result
     """
-    res = np.degrees(np.arcsin(number))
+    xp = _xa.array_namespace(number)
+    res = _xa.rad2deg(xp.asin(number))
     return res
 
 
@@ -99,7 +107,8 @@ def acosd(number):
     result : float
         arccos result
     """
-    res = np.degrees(np.arccos(number))
+    xp = _xa.array_namespace(number)
+    res = _xa.rad2deg(xp.acos(number))
     return res
 
 
@@ -117,7 +126,8 @@ def atand(number):
     result : float
         arctan result
     """
-    res = np.degrees(np.arctan(number))
+    xp = _xa.array_namespace(number)
+    res = _xa.rad2deg(xp.atan(number))
     return res
 
 

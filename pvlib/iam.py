@@ -14,6 +14,7 @@ import functools
 from scipy.optimize import minimize
 from pvlib.tools import cosd, sind, acosd
 from pvlib._deprecation import warn_deprecated
+from pvlib import _array_api as _xa
 from scipy.interpolate import make_interp_spline, interp1d
 
 # a dict of required parameter names for each IAM model
@@ -27,6 +28,7 @@ _IAM_MODEL_PARAMS = {
 }
 
 
+@_xa.labeled_io()
 def ashrae(aoi, b=0.05):
     r"""
     Determine the incidence angle modifier using the ASHRAE transmission
@@ -82,14 +84,13 @@ def ashrae(aoi, b=0.05):
     pvlib.iam.interp
     """
 
-    iam = 1 - b * (1 / np.cos(np.radians(aoi)) - 1)
-    aoi_gte_90 = np.full_like(aoi, False, dtype='bool')
-    np.greater_equal(np.abs(aoi), 90, where=~np.isnan(aoi), out=aoi_gte_90)
-    iam = np.where(aoi_gte_90, 0, iam)
-    iam = np.maximum(0, iam)
+    xp = _xa.array_namespace(aoi, b)
+    aoi, b = _xa.asarrays(aoi, b, xp=xp)
 
-    if isinstance(aoi, pd.Series):
-        iam = pd.Series(iam, index=aoi.index)
+    iam = 1 - b * (1 / cosd(aoi) - 1)
+    # comparisons with NaN are False, so NaN aoi gives NaN iam
+    iam = xp.where(xp.abs(aoi) >= 90, 0., iam)
+    iam = xp.maximum(0., iam)
 
     return iam
 
@@ -234,6 +235,7 @@ def physical(aoi, n=1.526, K=4.0, L=0.002, *, n_ar=None):
     return iam
 
 
+@_xa.labeled_io()
 def martin_ruiz(aoi, a_r=0.16):
     r'''
     Determine the incidence angle modifier (IAM) using the Martin
@@ -296,20 +298,17 @@ def martin_ruiz(aoi, a_r=0.16):
     '''
     # Contributed by Anton Driesse (@adriesse), PV Performance Labs. July, 2019
 
-    aoi_input = aoi
+    xp = _xa.array_namespace(aoi, a_r)
+    aoi, a_r = _xa.asarrays(aoi, a_r, xp=xp)
 
-    aoi = np.asanyarray(aoi)
-    a_r = np.asanyarray(a_r)
-
-    if np.any(np.less_equal(a_r, 0)):
+    # a data-dependent check cannot run on a lazy array (e.g. inside
+    # jax.jit) without forcing evaluation, so skip it there
+    if not _xa.is_lazy_array(a_r) and xp.any(a_r <= 0):
         raise ValueError("The parameter 'a_r' cannot be zero or negative.")
 
-    with np.errstate(invalid='ignore'):
-        iam = (1 - np.exp(-cosd(aoi) / a_r)) / (1 - np.exp(-1 / a_r))
-        iam = np.where(np.abs(aoi) >= 90.0, 0.0, iam)
-
-    if isinstance(aoi_input, pd.Series):
-        iam = pd.Series(iam, index=aoi_input.index)
+    with _xa.errstate(xp, invalid='ignore'):
+        iam = (1 - xp.exp(-cosd(aoi) / a_r)) / (1 - xp.exp(-1 / a_r))
+        iam = xp.where(xp.abs(aoi) >= 90.0, 0.0, iam)
 
     return iam
 

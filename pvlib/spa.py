@@ -7,11 +7,15 @@ with numba.
 # Contributors:
 # Created by Tony Lorenzo (@alorenzo175), Univ. of Arizona, 2015
 
+import functools
 import os
 import threading
+import types
 import warnings
 
 import numpy as np
+
+from pvlib import _array_api as _xa
 
 
 # this block is a way to use an environment variable to switch between
@@ -967,63 +971,172 @@ def solar_position_numba(unixtime, lat, lon, elev, pressure, temp, delta_t,
     return result
 
 
+# The formula functions above use ``np.`` so that numba can compile them.
+# To run the same source on any array API library, _formulas makes copies
+# of them whose ``np`` global is a namespace of array API equivalents. The
+# two functions that loop over coefficient tables get versions that loop
+# over the table rows with whole-array operations, as the NumPy path does,
+# and the two that multiply by booleans (not allowed by the standard) get
+# versions that use where.
+
+_FORMULAS = (
+    'julian_day', 'julian_ephemeris_day', 'julian_century',
+    'julian_ephemeris_century', 'julian_ephemeris_millennium',
+    'heliocentric_longitude', 'heliocentric_latitude',
+    'heliocentric_radius_vector', 'geocentric_longitude',
+    'geocentric_latitude', 'mean_elongation', 'mean_anomaly_sun',
+    'mean_anomaly_moon', 'moon_argument_latitude', 'moon_ascending_longitude',
+    'mean_ecliptic_obliquity', 'true_ecliptic_obliquity',
+    'aberration_correction', 'apparent_sun_longitude', 'mean_sidereal_time',
+    'apparent_sidereal_time', 'geocentric_sun_right_ascension',
+    'geocentric_sun_declination', 'local_hour_angle',
+    'equatorial_horizontal_parallax', 'uterm', 'xterm', 'yterm',
+    'parallax_sun_right_ascension', 'topocentric_sun_right_ascension',
+    'topocentric_sun_declination', 'topocentric_local_hour_angle',
+    'topocentric_elevation_angle_without_atmosphere',
+    'atmospheric_refraction_correction', 'topocentric_elevation_angle',
+    'topocentric_zenith_angle', 'topocentric_astronomers_azimuth',
+    'topocentric_azimuth_angle', 'sun_mean_longitude', 'equation_of_time',
+)
+
+
+def _sum_mult_cos_add_mult_xp(arr, x, xp):
+    s = 0.
+    for a, b, c in arr.tolist():
+        s = s + a * xp.cos(b + c * x)
+    return s
+
+
+def _longitude_obliquity_nutation_xp(julian_ephemeris_century, x0, x1, x2,
+                                     x3, x4, xp):
+    delta_psi_sum = 0.
+    delta_eps_sum = 0.
+    for (y0, y1, y2, y3, y4), (a, b, c, d) in zip(
+            NUTATION_YTERM_ARRAY.tolist(), NUTATION_ABCD_ARRAY.tolist()):
+        arg = _xa.deg2rad(y0*x0 + y1*x1 + y2*x2 + y3*x3 + y4*x4)
+        delta_psi_sum = (delta_psi_sum
+                         + (a + b * julian_ephemeris_century) * xp.sin(arg))
+        delta_eps_sum = (delta_eps_sum
+                         + (c + d * julian_ephemeris_century) * xp.cos(arg))
+    return delta_psi_sum*1.0/36000000, delta_eps_sum*1.0/36000000
+
+
+def _atmospheric_refraction_correction_xp(local_pressure, local_temp,
+                                          topocentric_elevation_angle_wo_atmos,
+                                          atmos_refract, xp):
+    e0 = topocentric_elevation_angle_wo_atmos
+    delta_e = ((local_pressure / 1010.0) * (283.0 / (273 + local_temp))
+               * 1.02 / (60 * xp.tan(_xa.deg2rad(e0 + 10.3 / (e0 + 5.11)))))
+    # zero when the sun is below the horizon
+    return xp.where(e0 >= -1.0 * (0.26667 + atmos_refract), delta_e, 0.)
+
+
+def _equation_of_time_xp(sun_mean_longitude, geocentric_sun_right_ascension,
+                         longitude_nutation, true_ecliptic_obliquity, xp):
+    E = (sun_mean_longitude - 0.0057183 - geocentric_sun_right_ascension +
+         longitude_nutation * xp.cos(_xa.deg2rad(true_ecliptic_obliquity)))
+    # limit between 0 and 360
+    E = E % 360
+    # convert to minutes
+    E = E * 4
+    return xp.where(E > 20, E - 1440, xp.where(E < -20, E + 1440, E))
+
+
+@functools.lru_cache
+def _formulas(xp):
+    shim = types.SimpleNamespace(
+        cos=xp.cos, sin=xp.sin, tan=xp.tan, arcsin=xp.asin, arctan=xp.atan,
+        arctan2=xp.atan2, radians=_xa.deg2rad, degrees=_xa.rad2deg,
+        rad2deg=_xa.rad2deg)
+    env = dict(globals(), np=shim)
+    funcs = {}
+    for name in _FORMULAS:
+        f = globals()[name]
+        f = getattr(f, 'py_func', f)  # the Python source of a numba function
+        funcs[name] = types.FunctionType(f.__code__, env, name,
+                                         f.__defaults__)
+    env.update(funcs)
+    env['sum_mult_cos_add_mult'] = functools.partial(
+        _sum_mult_cos_add_mult_xp, xp=xp)
+    funcs['longitude_obliquity_nutation'] = functools.partial(
+        _longitude_obliquity_nutation_xp, xp=xp)
+    funcs['atmospheric_refraction_correction'] = functools.partial(
+        _atmospheric_refraction_correction_xp, xp=xp)
+    funcs['equation_of_time'] = functools.partial(_equation_of_time_xp, xp=xp)
+    return types.SimpleNamespace(**funcs)
+
+
 def solar_position_numpy(unixtime, lat, lon, elev, pressure, temp, delta_t,
                          atmos_refract, numthreads, sst=False, esd=False):
-    """Calculate the solar position assuming unixtime is a numpy array. Note
-    this function will not work if the solar position functions were
-    compiled with numba.
-    """
+    """Calculate the solar position with whole-array operations.
 
-    jd = julian_day(unixtime)
-    jde = julian_ephemeris_day(jd, delta_t)
-    jc = julian_century(jd)
-    jce = julian_ephemeris_century(jde)
-    jme = julian_ephemeris_millennium(jce)
-    R = heliocentric_radius_vector(jme)
+    Works with NumPy and any array API library (PyTorch, JAX, CuPy, Dask,
+    ...). Inputs broadcast against each other, so ``unixtime`` with shape
+    ``(T, 1, 1)`` and ``lat``, ``lon`` with shapes ``(1, Y, 1)`` and
+    ``(1, 1, X)`` give a time by grid result, with the terms that depend only
+    on time computed once per time. ``unixtime`` must be float64: float32
+    seconds since 1970 resolve only 128 s. Note this function will not work
+    if the solar position functions were compiled with numba.
+    """
+    xp = _xa.array_namespace(unixtime, lat, lon, elev, pressure, temp,
+                             delta_t, atmos_refract)
+    (unixtime, lat, lon, elev, pressure, temp, delta_t,
+     atmos_refract) = _xa.asarrays(unixtime, lat, lon, elev, pressure, temp,
+                                   delta_t, atmos_refract, xp=xp)
+    if unixtime.dtype != xp.float64:
+        raise TypeError('SPA needs float64 times; got unixtime with dtype '
+                        f'{unixtime.dtype}')
+    f = _formulas(xp)
+
+    jd = f.julian_day(unixtime)
+    jde = f.julian_ephemeris_day(jd, delta_t)
+    jc = f.julian_century(jd)
+    jce = f.julian_ephemeris_century(jde)
+    jme = f.julian_ephemeris_millennium(jce)
+    R = f.heliocentric_radius_vector(jme)
     if esd:
         return (R, )
-    L = heliocentric_longitude(jme)
-    B = heliocentric_latitude(jme)
-    Theta = geocentric_longitude(L)
-    beta = geocentric_latitude(B)
-    x0 = mean_elongation(jce)
-    x1 = mean_anomaly_sun(jce)
-    x2 = mean_anomaly_moon(jce)
-    x3 = moon_argument_latitude(jce)
-    x4 = moon_ascending_longitude(jce)
-    l_o_nutation = np.empty((2, len(x0)))
-    longitude_obliquity_nutation(jce, x0, x1, x2, x3, x4, l_o_nutation)
-    delta_psi = l_o_nutation[0]
-    delta_epsilon = l_o_nutation[1]
-    epsilon0 = mean_ecliptic_obliquity(jme)
-    epsilon = true_ecliptic_obliquity(epsilon0, delta_epsilon)
-    delta_tau = aberration_correction(R)
-    lamd = apparent_sun_longitude(Theta, delta_psi, delta_tau)
-    v0 = mean_sidereal_time(jd, jc)
-    v = apparent_sidereal_time(v0, delta_psi, epsilon)
-    alpha = geocentric_sun_right_ascension(lamd, epsilon, beta)
-    delta = geocentric_sun_declination(lamd, epsilon, beta)
+    L = f.heliocentric_longitude(jme)
+    B = f.heliocentric_latitude(jme)
+    Theta = f.geocentric_longitude(L)
+    beta = f.geocentric_latitude(B)
+    x0 = f.mean_elongation(jce)
+    x1 = f.mean_anomaly_sun(jce)
+    x2 = f.mean_anomaly_moon(jce)
+    x3 = f.moon_argument_latitude(jce)
+    x4 = f.moon_ascending_longitude(jce)
+    delta_psi, delta_epsilon = f.longitude_obliquity_nutation(
+        jce, x0, x1, x2, x3, x4)
+    epsilon0 = f.mean_ecliptic_obliquity(jme)
+    epsilon = f.true_ecliptic_obliquity(epsilon0, delta_epsilon)
+    delta_tau = f.aberration_correction(R)
+    lamd = f.apparent_sun_longitude(Theta, delta_psi, delta_tau)
+    v0 = f.mean_sidereal_time(jd, jc)
+    v = f.apparent_sidereal_time(v0, delta_psi, epsilon)
+    alpha = f.geocentric_sun_right_ascension(lamd, epsilon, beta)
+    delta = f.geocentric_sun_declination(lamd, epsilon, beta)
     if sst:
         return v, alpha, delta
-    m = sun_mean_longitude(jme)
-    eot = equation_of_time(m, alpha, delta_psi, epsilon)
-    H = local_hour_angle(v, lon, alpha)
-    xi = equatorial_horizontal_parallax(R)
-    u = uterm(lat)
-    x = xterm(u, lat, elev)
-    y = yterm(u, lat, elev)
-    delta_alpha = parallax_sun_right_ascension(x, xi, H, delta)
-    delta_prime = topocentric_sun_declination(delta, x, y, xi, delta_alpha, H)
-    H_prime = topocentric_local_hour_angle(H, delta_alpha)
-    e0 = topocentric_elevation_angle_without_atmosphere(lat, delta_prime,
-                                                        H_prime)
-    delta_e = atmospheric_refraction_correction(pressure, temp, e0,
-                                                atmos_refract)
-    e = topocentric_elevation_angle(e0, delta_e)
-    theta = topocentric_zenith_angle(e)
-    theta0 = topocentric_zenith_angle(e0)
-    gamma = topocentric_astronomers_azimuth(H_prime, delta_prime, lat)
-    phi = topocentric_azimuth_angle(gamma)
+    m = f.sun_mean_longitude(jme)
+    eot = f.equation_of_time(m, alpha, delta_psi, epsilon)
+    H = f.local_hour_angle(v, lon, alpha)
+    xi = f.equatorial_horizontal_parallax(R)
+    u = f.uterm(lat)
+    x = f.xterm(u, lat, elev)
+    y = f.yterm(u, lat, elev)
+    delta_alpha = f.parallax_sun_right_ascension(x, xi, H, delta)
+    delta_prime = f.topocentric_sun_declination(delta, x, y, xi, delta_alpha,
+                                                H)
+    H_prime = f.topocentric_local_hour_angle(H, delta_alpha)
+    e0 = f.topocentric_elevation_angle_without_atmosphere(lat, delta_prime,
+                                                          H_prime)
+    delta_e = f.atmospheric_refraction_correction(pressure, temp, e0,
+                                                  atmos_refract)
+    e = f.topocentric_elevation_angle(e0, delta_e)
+    theta = f.topocentric_zenith_angle(e)
+    theta0 = f.topocentric_zenith_angle(e0)
+    gamma = f.topocentric_astronomers_azimuth(H_prime, delta_prime, lat)
+    phi = f.topocentric_azimuth_angle(gamma)
     return theta, theta0, e, e0, phi, eot
 
 
@@ -1098,10 +1211,15 @@ def solar_position(unixtime, lat, lon, elev, pressure, temp, delta_t,
                      sst, esd)
 
     if not isinstance(result, np.ndarray):
-        try:
-            result = np.array(result)
-        except Exception:
-            pass
+        xp = _xa.array_namespace(*result)
+        if xp is _xa.np_compat:
+            try:
+                # outputs that depend only on time may have size-1 axes
+                result = np.array(np.broadcast_arrays(*result))
+            except Exception:
+                pass
+        else:
+            result = xp.stack(xp.broadcast_arrays(*result))
 
     return result
 
@@ -1269,7 +1387,10 @@ def calculate_deltat(year, month):
           'are not intended to be used for these years.'
 
     try:
-        if np.any((year > 3000) | (year < -1999)):
+        xp = _xa.array_namespace(year, month)
+        # skip the check for lazy arrays, where it would force evaluation
+        if (not _xa.is_lazy_array(year)
+                and xp.any((year > 3000) | (year < -1999))):
             warnings.warn(plw)
     except ValueError:
         if (year > 3000) | (year < -1999):
@@ -1279,11 +1400,11 @@ def calculate_deltat(year, month):
 
     y = year + (month - 0.5)/12
 
-    deltat = np.where(year < -500,
+    deltat = xp.where(year < -500,
 
                       -20+32*((y-1820)/100)**2, 0)
 
-    deltat = np.where((-500 <= year) & (year < 500),
+    deltat = xp.where((-500 <= year) & (year < 500),
 
                       10583.6-1014.41*(y/100)
                       + 33.78311*(y/100)**2
@@ -1292,7 +1413,7 @@ def calculate_deltat(year, month):
                       + 0.022174192*(y/100)**5
                       + 0.0090316521*(y/100)**6, deltat)
 
-    deltat = np.where((500 <= year) & (year < 1600),
+    deltat = xp.where((500 <= year) & (year < 1600),
 
                       1574.2-556.01*((y-1000)/100)
                       + 71.23472*((y-1000)/100)**2
@@ -1301,20 +1422,20 @@ def calculate_deltat(year, month):
                       - 0.005050998*((y-1000)/100)**5
                       + 0.0083572073*((y-1000)/100)**6, deltat)
 
-    deltat = np.where((1600 <= year) & (year < 1700),
+    deltat = xp.where((1600 <= year) & (year < 1700),
 
                       120-0.9808*(y-1600)
                       - 0.01532*(y-1600)**2
                       + (y-1600)**3/7129, deltat)
 
-    deltat = np.where((1700 <= year) & (year < 1800),
+    deltat = xp.where((1700 <= year) & (year < 1800),
 
                       8.83+0.1603*(y-1700)
                       - 0.0059285*(y-1700)**2
                       + 0.00013336*(y-1700)**3
                       - (y-1700)**4/1174000, deltat)
 
-    deltat = np.where((1800 <= year) & (year < 1860),
+    deltat = xp.where((1800 <= year) & (year < 1860),
 
                       13.72-0.332447*(y-1800)
                       + 0.0068612*(y-1800)**2
@@ -1324,7 +1445,7 @@ def calculate_deltat(year, month):
                       - 0.0000001699*(y-1800)**6
                       + 0.000000000875*(y-1800)**7, deltat)
 
-    deltat = np.where((1860 <= year) & (year < 1900),
+    deltat = xp.where((1860 <= year) & (year < 1900),
 
                       7.62+0.5737*(y-1860)
                       - 0.251754*(y-1860)**2
@@ -1332,32 +1453,32 @@ def calculate_deltat(year, month):
                       - 0.0004473624*(y-1860)**4
                       + (y-1860)**5/233174, deltat)
 
-    deltat = np.where((1900 <= year) & (year < 1920),
+    deltat = xp.where((1900 <= year) & (year < 1920),
 
                       -2.79+1.494119*(y-1900)
                       - 0.0598939*(y-1900)**2
                       + 0.0061966*(y-1900)**3
                       - 0.000197*(y-1900)**4, deltat)
 
-    deltat = np.where((1920 <= year) & (year < 1941),
+    deltat = xp.where((1920 <= year) & (year < 1941),
 
                       21.20+0.84493*(y-1920)
                       - 0.076100*(y-1920)**2
                       + 0.0020936*(y-1920)**3, deltat)
 
-    deltat = np.where((1941 <= year) & (year < 1961),
+    deltat = xp.where((1941 <= year) & (year < 1961),
 
                       29.07+0.407*(y-1950)
                       - (y-1950)**2/233
                       + (y-1950)**3/2547, deltat)
 
-    deltat = np.where((1961 <= year) & (year < 1986),
+    deltat = xp.where((1961 <= year) & (year < 1986),
 
                       45.45+1.067*(y-1975)
                       - (y-1975)**2/260
                       - (y-1975)**3/718, deltat)
 
-    deltat = np.where((1986 <= year) & (year < 2005),
+    deltat = xp.where((1986 <= year) & (year < 2005),
 
                       63.86+0.3345*(y-2000)
                       - 0.060374*(y-2000)**2
@@ -1365,17 +1486,17 @@ def calculate_deltat(year, month):
                       + 0.000651814*(y-2000)**4
                       + 0.00002373599*(y-2000)**5, deltat)
 
-    deltat = np.where((2005 <= year) & (year < 2050),
+    deltat = xp.where((2005 <= year) & (year < 2050),
 
                       62.92+0.32217*(y-2000)
                       + 0.005589*(y-2000)**2, deltat)
 
-    deltat = np.where((2050 <= year) & (year < 2150),
+    deltat = xp.where((2050 <= year) & (year < 2150),
 
                       -20+32*((y-1820)/100)**2
                       - 0.5628*(2150-y), deltat)
 
-    deltat = np.where(year >= 2150,
+    deltat = xp.where(year >= 2150,
 
                       -20+32*((y-1820)/100)**2, deltat)
 

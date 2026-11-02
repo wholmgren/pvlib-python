@@ -6,6 +6,7 @@ speed at different heights.
 
 import numpy as np
 import pandas as pd
+from pvlib import _array_api as _xa
 
 APPARENT_ZENITH_MODELS = ('simple', 'kasten1966', 'kastenyoung1989',
                           'gueymard1993', 'gueymard2003', 'pickering2002')
@@ -131,6 +132,7 @@ def get_absolute_airmass(airmass_relative, pressure=101325.):
     return airmass_absolute
 
 
+@_xa.labeled_io()
 def get_relative_airmass(zenith, model='kastenyoung1989'):
     '''
     Calculate relative (not pressure-adjusted) airmass at sea level.
@@ -220,42 +222,42 @@ def get_relative_airmass(zenith, model='kastenyoung1989'):
 
     '''
 
+    xp = _xa.array_namespace(zenith)
+    zenith, = _xa.asarrays(zenith, xp=xp)
+
     # set zenith values greater than 90 to nans
-    z = np.where(zenith > 90, np.nan, zenith)
-    zenith_rad = np.radians(z)
+    z = xp.where(zenith > 90, xp.nan, zenith)
+    zenith_rad = _xa.deg2rad(z)
 
     model = model.lower()
 
     if 'kastenyoung1989' == model:
-        am = (1.0 / (np.cos(zenith_rad) +
+        am = (1.0 / (xp.cos(zenith_rad) +
               0.50572*((6.07995 + (90 - z)) ** - 1.6364)))
     elif 'kasten1966' == model:
-        am = 1.0 / (np.cos(zenith_rad) + 0.15*((93.885 - z) ** - 1.253))
+        am = 1.0 / (xp.cos(zenith_rad) + 0.15*((93.885 - z) ** - 1.253))
     elif 'simple' == model:
-        am = 1.0 / np.cos(zenith_rad)
+        am = 1.0 / xp.cos(zenith_rad)
     elif 'pickering2002' == model:
-        am = (1.0 / (np.sin(np.radians(90 - z +
+        am = (1.0 / (xp.sin(_xa.deg2rad(90 - z +
               244.0 / (165 + 47.0 * (90 - z) ** 1.1)))))
     elif 'youngirvine1967' == model:
-        sec_zen = 1.0 / np.cos(zenith_rad)
+        sec_zen = 1.0 / xp.cos(zenith_rad)
         am = sec_zen * (1 - 0.0012 * (sec_zen * sec_zen - 1))
     elif 'young1994' == model:
-        am = ((1.002432*((np.cos(zenith_rad)) ** 2) +
-              0.148386*(np.cos(zenith_rad)) + 0.0096467) /
-              (np.cos(zenith_rad) ** 3 +
-              0.149864*(np.cos(zenith_rad) ** 2) +
-              0.0102963*(np.cos(zenith_rad)) + 0.000303978))
+        am = ((1.002432*((xp.cos(zenith_rad)) ** 2) +
+              0.148386*(xp.cos(zenith_rad)) + 0.0096467) /
+              (xp.cos(zenith_rad) ** 3 +
+              0.149864*(xp.cos(zenith_rad) ** 2) +
+              0.0102963*(xp.cos(zenith_rad)) + 0.000303978))
     elif 'gueymard1993' == model:  # [4], Eq. 22 and [5], Eq. 3b
-        am = (1.0 / (np.cos(zenith_rad) +
+        am = (1.0 / (xp.cos(zenith_rad) +
               0.00176759*(z)*((94.37515 - z) ** - 1.21563)))
     elif 'gueymard2003' == model:
-        am = (1.0 / (np.cos(zenith_rad) +
+        am = (1.0 / (xp.cos(zenith_rad) +
               0.48353*(z**0.095846)/(96.741 - z)**1.754))
     else:
         raise ValueError('%s is not a valid model for relativeairmass', model)
-
-    if isinstance(zenith, pd.Series):
-        am = pd.Series(am, index=zenith.index)
 
     return am
 

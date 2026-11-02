@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from pvlib.tools import sind
 from pvlib.tools import _get_sample_intervals
+from pvlib import _array_api as _xa
 import scipy
 import scipy.constants
 import warnings
@@ -54,6 +55,7 @@ def _temperature_model_params(model, parameter_set):
         raise KeyError(msg)
 
 
+@_xa.labeled_io()
 def sapm_cell(poa_global, temp_air, wind_speed, a, b, deltaT,
               irrad_ref=1000.):
     r'''
@@ -161,6 +163,7 @@ def sapm_cell(poa_global, temp_air, wind_speed, a, b, deltaT,
                                  irrad_ref)
 
 
+@_xa.labeled_io()
 def sapm_module(poa_global, temp_air, wind_speed, a, b):
     r'''
     Calculate module back surface temperature per the Sandia Array
@@ -241,7 +244,10 @@ def sapm_module(poa_global, temp_air, wind_speed, a, b):
     sapm_cell
     sapm_cell_from_module
     '''
-    return poa_global * np.exp(a + b * wind_speed) + temp_air
+    xp = _xa.array_namespace(poa_global, temp_air, wind_speed, a, b)
+    poa_global, temp_air, wind_speed, a, b = _xa.asarrays(
+        poa_global, temp_air, wind_speed, a, b, xp=xp)
+    return poa_global * xp.exp(a + b * wind_speed) + temp_air
 
 
 def sapm_cell_from_module(module_temperature, poa_global, deltaT,
@@ -431,6 +437,7 @@ def pvsyst_cell(poa_global, temp_air, wind_speed=1.0, u_c=29.0, u_v=0.0,
     return temp_air + temp_difference
 
 
+@_xa.labeled_io()
 def faiman(poa_global, temp_air, wind_speed=1.0, u0=25.0, u1=6.84):
     r'''
     Calculate cell or module temperature using the Faiman model.
@@ -496,11 +503,9 @@ def faiman(poa_global, temp_air, wind_speed=1.0, u0=25.0, u1=6.84):
 
     # Contributed by Anton Driesse (@adriesse), PV Performance Labs. Dec., 2019
 
-    # The following lines may seem odd since u0 & u1 are probably scalar,
-    # but it serves an indirect and easy way of allowing lists and
-    # tuples for the other function arguments.
-    u0 = np.asanyarray(u0)
-    u1 = np.asanyarray(u1)
+    xp = _xa.array_namespace(poa_global, temp_air, wind_speed, u0, u1)
+    poa_global, temp_air, wind_speed, u0, u1 = _xa.asarrays(
+        poa_global, temp_air, wind_speed, u0, u1, xp=xp)
 
     total_loss_factor = u0 + u1 * wind_speed
     heat_input = poa_global

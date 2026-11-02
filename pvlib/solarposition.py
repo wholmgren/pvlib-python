@@ -24,6 +24,7 @@ import scipy.optimize as so
 import warnings
 
 from pvlib import atmosphere, tools
+from pvlib import _array_api as _xa
 from pvlib.tools import datetime_to_djd, djd_to_datetime
 
 
@@ -294,12 +295,13 @@ def spa_python(time, latitude, longitude,
 
     Parameters
     ----------
-    time : pandas.DatetimeIndex
-        Must be localized or UTC will be assumed.
-    latitude : float
+    time : pandas.DatetimeIndex, datetime-like, or numeric array
+        Must be localized or UTC will be assumed. A numeric array, from any
+        array API library, is float64 seconds since 1970-01-01 00:00 UTC.
+    latitude : numeric
         Latitude in decimal degrees. Positive north of equator, negative
         to south.
-    longitude : float
+    longitude : numeric
         Longitude in decimal degrees. Positive east of prime meridian,
         negative to west.
     altitude : float, default 0.0
@@ -311,7 +313,7 @@ def spa_python(time, latitude, longitude,
     delta_t : float or array, optional, default 67.0
         Difference between terrestrial time and UT1.
         If delta_t is None, uses spa.calculate_deltat
-        using time.year and time.month from pandas.DatetimeIndex.
+        using the year and month of ``time``.
         For most simulations the default delta_t is sufficient.
         The USNO has historical and forecasted delta_t [3]_.
     atmos_refract : float, optional
@@ -326,8 +328,9 @@ def spa_python(time, latitude, longitude,
 
     Returns
     -------
-    DataFrame
-        The DataFrame will have the following columns:
+    DataFrame, xarray.Dataset or dict of arrays
+        A DataFrame indexed by ``time`` for pandas or datetime-like input,
+        a Dataset for xarray input, otherwise a dict of arrays, with:
 
         - apparent_zenith (degrees),
         - zenith (degrees),
@@ -356,6 +359,25 @@ def spa_python(time, latitude, longitude,
 
     # Added by Tony Lorenzo (@alorenzo175), University of Arizona, 2015
 
+    # keep accepting lists and scalars of datetimes. Numeric arrays are unix
+    # seconds and xarray time is converted by labeled_io
+    if not (isinstance(time, pd.DatetimeIndex) or _xa._is_dataarray(time)
+            or (_xa.is_array_api_obj(time)
+                and not _xa._is_datetime_like(time))):
+        try:
+            time = pd.DatetimeIndex(time)
+        except (TypeError, ValueError):
+            time = pd.DatetimeIndex([time, ])
+
+    return _spa_python(time, latitude, longitude, altitude, pressure,
+                       temperature, delta_t, atmos_refract, how, numthreads)
+
+
+@_xa.labeled_io(time={'time': 'unix'})
+def _spa_python(time, latitude, longitude, altitude, pressure, temperature,
+                delta_t, atmos_refract, how, numthreads):
+    # time is seconds since 1970-01-01 UTC, from labeled_io
+    unixtime = time
     lat = latitude
     lon = longitude
     elev = altitude
@@ -363,29 +385,25 @@ def spa_python(time, latitude, longitude,
 
     atmos_refract = atmos_refract or 0.5667
 
-    if not isinstance(time, pd.DatetimeIndex):
-        try:
-            time = pd.DatetimeIndex(time)
-        except (TypeError, ValueError):
-            time = pd.DatetimeIndex([time, ])
-
-    unixtime = _datetime_to_unixtime(time)
-
     spa = _spa_python_import(how)
 
     if delta_t is None:
-        time_utc = tools._pandas_to_utc(time)
-        delta_t = spa.calculate_deltat(time_utc.year, time_utc.month)
+        xp = _xa.array_namespace(unixtime)
+        unixtime_, = _xa.asarrays(unixtime, xp=xp)
+        year, month, _, _ = _xa.unix_to_civil(unixtime_, xp)
+        delta_t = spa.calculate_deltat(year, month)
 
-    app_zenith, zenith, app_elevation, elevation, azimuth, eot = \
-        spa.solar_position(unixtime, lat, lon, elev, pressure, temperature,
-                           delta_t, atmos_refract, numthreads)
+    position = spa.solar_position(unixtime, lat, lon, elev, pressure,
+                                  temperature, delta_t, atmos_refract,
+                                  numthreads)
+    # index rather than unpack: the standard does not define iteration
+    app_zenith, zenith, app_elevation, elevation, azimuth, eot = (
+        position[i, ...] for i in range(6))
 
-    result = pd.DataFrame({'apparent_zenith': app_zenith, 'zenith': zenith,
-                           'apparent_elevation': app_elevation,
-                           'elevation': elevation, 'azimuth': azimuth,
-                           'equation_of_time': eot},
-                          index=time)
+    result = {'apparent_zenith': app_zenith, 'zenith': zenith,
+              'apparent_elevation': app_elevation,
+              'elevation': elevation, 'azimuth': azimuth,
+              'equation_of_time': eot}
 
     return result
 
