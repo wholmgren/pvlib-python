@@ -48,8 +48,9 @@ def array_namespace(*xs):
     Array namespace for the inputs ``xs``.
 
     ``None``, Python and NumPy scalars, lists, tuples and pandas objects are
-    treated as NumPy. Inputs from two different array libraries raise
-    ``TypeError``.
+    treated as NumPy. NumPy arrays join a Dask calculation, since Dask arrays
+    are NumPy arrays computed lazily (xarray mixes them the same way). Other
+    inputs from two different array libraries raise ``TypeError``.
     """
     # fast path for the common case, see the benchmarks in GH 2515
     if all(x is None or isinstance(x, _NUMPY_TYPES) for x in xs):
@@ -58,6 +59,8 @@ def array_namespace(*xs):
               and not isinstance(x, np.generic)]
     if not arrays:
         return np_compat
+    if any(array_api_compat.is_dask_array(x) for x in arrays):
+        arrays = [x for x in arrays if not isinstance(x, np.ndarray)]
     return array_api_compat.array_namespace(*arrays)
 
 
@@ -108,6 +111,17 @@ def is_concrete(x):
         import jax
         return not isinstance(x, jax.core.Tracer)
     return not is_lazy_array(x)
+
+
+def known_any(cond, xp):
+    """
+    ``xp.any(cond)`` as a bool, or False if its value isn't known yet. For
+    input checks that need values: they are skipped inside ``jax.jit``,
+    where anything computed is traced, even from arrays made outside, and
+    for lazy Dask arrays, whose evaluation a check should not force.
+    """
+    result = xp.any(cond)
+    return is_concrete(result) and bool(result)
 
 
 def errstate(xp, **kwargs):
@@ -344,6 +358,23 @@ def _call_xarray(func, arguments, call, name):
     for da in aligned:
         dims += [d for d in da.dims if d not in dims]
         sizes.update(da.sizes)
+    full = tuple(sizes[d] for d in dims)
+    # unlabeled arrays broadcast by position, as in xarray arithmetic, and
+    # may not add dimensions, which would leave the result unlabeled
+    for k, v in arguments.items():
+        if k in keys or not (is_array_api_obj(v) or isinstance(v, list)):
+            continue
+        shape = tuple(np.shape(v) if isinstance(v, list) else v.shape)
+        try:
+            ok = np.broadcast_shapes(shape, full) == full
+        except ValueError:
+            ok = False
+        if not ok:
+            raise ValueError(
+                f'{k} has shape {shape}, which does not broadcast to '
+                f'{full}, the shape of dimensions {tuple(dims)} of the '
+                'DataArray arguments. Pass a DataArray to broadcast by '
+                'dimension name.')
     # private names: a parameter may share its name with a coordinate
     coords = xr.Dataset({f'_{i}': da for i, da in enumerate(aligned)}).coords
     for k, da in zip(keys, aligned):
@@ -355,7 +386,6 @@ def _call_xarray(func, arguments, call, name):
     if name is _INFER:
         names = {da.name for da in aligned}
         name = names.pop() if len(names) == 1 else None
-    full = tuple(sizes[d] for d in dims)
 
     def relabel(o, name):
         if is_array_api_obj(o) and getattr(o, 'ndim', 0) == len(dims):

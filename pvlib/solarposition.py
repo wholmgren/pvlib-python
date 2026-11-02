@@ -377,8 +377,7 @@ def _spa_python(time, latitude, longitude, altitude, pressure, temperature,
     xp = _xa.array_namespace(unixtime)
     # 2e11 s is the year 8300; nanoseconds (e.g. DatetimeIndex.asi8) are far
     # larger for any time after 1970-01-01 00:03:20
-    if _xa.is_concrete(unixtime) and xp.any(xp.abs(
-            _xa.asarrays(unixtime, xp=xp)[0]) > 2e11):
+    if _xa.known_any(xp.abs(_xa.asarrays(unixtime, xp=xp)[0]) > 2e11, xp):
         raise ValueError('numeric time must be seconds since 1970-01-01 UTC; '
                          'these look like milli-, micro- or nanoseconds')
     lat = latitude

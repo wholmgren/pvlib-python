@@ -101,7 +101,7 @@ def hsu(rainfall, cleaning_threshold, surface_tilt, pm2_5, pm10,
 
     # pandas rolling raises for an unsorted index; the window sums below
     # would be silently wrong
-    if _xa.is_concrete(times) and xp.any(xp.diff(times) < 0):
+    if _xa.known_any(xp.diff(times) < 0, xp):
         raise ValueError('times must be increasing')
 
     # accumulate rainfall into periods for comparison with threshold.

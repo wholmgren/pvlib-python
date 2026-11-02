@@ -207,6 +207,74 @@ def djd_to_datetime(djd, tz='UTC'):
     return utc_time.astimezone(zoneinfo.ZoneInfo(tz))
 
 
+def datetime_to_unix(time):
+    """
+    Convert times to seconds since 1970-01-01 00:00 UTC.
+
+    Functions that take times also accept them as these numbers, for
+    example as a PyTorch or JAX array, which have no datetime type.
+
+    Parameters
+    ----------
+    time : pandas.DatetimeIndex, pandas.Series, numpy.ndarray, or scalar
+        Datetimes. Times without a time zone are taken as UTC.
+
+    Returns
+    -------
+    numpy.ndarray or numpy.float64
+        float64 seconds since 1970-01-01 00:00 UTC, in the shape of
+        ``time``.
+
+    See Also
+    --------
+    unix_to_doy
+
+    Examples
+    --------
+    >>> times = pd.date_range('2026-06-01 12:00', periods=2, freq='1h',
+    ...                       tz='Etc/GMT+7')
+    >>> datetime_to_unix(times)
+    array([1.7803404e+09, 1.7803440e+09])
+    """
+    return _xa._datetime_to_number(time, 'unix')
+
+
+@_xa.labeled_io(name=None)
+def unix_to_doy(t):
+    """
+    Day of year, in UTC, of times in seconds since 1970-01-01 00:00 UTC.
+
+    Works on arrays from any library that supports the Python array API
+    standard, also inside ``jax.jit``, so a model that keeps time as Unix
+    seconds needs no datetimes to get the day of year.
+
+    Parameters
+    ----------
+    t : numeric, array-like, pandas.Series, or xarray.DataArray
+        float64 seconds since 1970-01-01 00:00 UTC. In float32 these
+        resolve only 128 s, so float32 raises TypeError.
+
+    Returns
+    -------
+    numeric, array, pandas.Series, or xarray.DataArray
+        Day of year, 1 on January 1, as floats.
+
+    See Also
+    --------
+    datetime_to_unix
+
+    Examples
+    --------
+    >>> unix_to_doy(datetime_to_unix(pd.Timestamp('2026-12-31 23:00')))
+    np.float64(365.0)
+    """
+    xp = _xa.array_namespace(t)
+    t, = _xa.asarrays(t, xp=xp)
+    if t.dtype != xp.float64:
+        raise TypeError(f't must be float64; got dtype {t.dtype}')
+    return _xa.unix_to_civil(t, xp)[3]
+
+
 def _pandas_to_doy(pd_object):
     """
     Finds the day of year for a pandas datetime-like object.

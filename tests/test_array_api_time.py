@@ -9,7 +9,7 @@ import pytest
 from numpy.testing import assert_allclose
 
 from pvlib import (_array_api as _xa, iam, inverter, irradiance, pvsystem,
-                   soiling, solarposition, temperature)
+                   soiling, solarposition, temperature, tools)
 
 from .test_array_api import (BACKENDS, _jax, _torch,  # noqa: F401
                              _restore_jax_x64)
@@ -55,7 +55,7 @@ def weather():
 def test_unix_to_civil(backend):
     name, mod, a = backend
     times = pd.date_range('1899-12-30', '2101-01-02', freq='37h')
-    t = _xa._datetime_to_number(times, 'unix')
+    t = tools.datetime_to_unix(times)
     xp = _xa.array_namespace(a(t))
     fields = [_to_numpy(f) for f in _xa.unix_to_civil(a(t), xp)]
     expected = [times.year, times.month, times.day, times.day_of_year]
@@ -63,11 +63,25 @@ def test_unix_to_civil(backend):
         np.testing.assert_array_equal(actual, exp)
 
 
+def test_unix_to_doy(backend):
+    name, mod, a = backend
+    times = pd.date_range('1899-12-30', '2101-01-02', freq='37h', tz='UTC')
+    out = tools.unix_to_doy(a(tools.datetime_to_unix(times)))
+    assert type(out) is type(a([0.]))
+    np.testing.assert_array_equal(_to_numpy(out), times.day_of_year)
+
+
+def test_unix_to_doy_rejects_float32():
+    torch = _torch()
+    with pytest.raises(TypeError, match='float64'):
+        tools.unix_to_doy(torch.asarray([1.78e9], dtype=torch.float32))
+
+
 def test_spa_python_numeric_time(backend, weather):
     name, mod, a = backend
     times = weather.index
     expected = solarposition.spa_python(times, LAT, LON, delta_t=None)
-    unix = a(_xa._datetime_to_number(times, 'unix'))
+    unix = a(tools.datetime_to_unix(times))
     out = solarposition.spa_python(unix, LAT, LON, delta_t=None)
     assert type(out['zenith']) is type(unix)
     for key in expected:
@@ -98,14 +112,29 @@ def test_spa_python_xarray_grid():
                     expected['equation_of_time'])
 
 
+def test_spa_python_xarray_grid_on_dask():
+    # time is converted to a NumPy array at the boundary and joins the Dask
+    # arrays of the grid
+    xr = pytest.importorskip('xarray')
+    pytest.importorskip('dask')
+    import dask.array as da
+    times = pd.date_range('2026-03-20', periods=48, freq='1h', tz='UTC')
+    time = xr.DataArray(times, dims='time', coords={'time': times})
+    lat = xr.DataArray(np.linspace(30., 40., 5), dims='lat')
+    lon = xr.DataArray(np.linspace(-115., -105., 4), dims='lon')
+    expected = solarposition.spa_python(time, lat, lon)
+    out = solarposition.spa_python(time, lat.chunk(2), lon.chunk(2))
+    assert isinstance(out['zenith'].data, da.Array)
+    assert_allclose(out['zenith'], expected['zenith'])
+
+
 def test_erbs_day_of_year(backend, weather):
     name, mod, a = backend
     times = weather.index
     zenith = solarposition.spa_python(times, LAT, LON)['zenith']
     expected = irradiance.erbs(weather['ghi'], zenith, times)
-    xp = _xa.array_namespace(a([0.]))
-    unix = a(_xa._datetime_to_number(times, 'unix'))
-    doy = _xa.unix_to_civil(unix, xp)[3]
+    unix = a(tools.datetime_to_unix(times))
+    doy = tools.unix_to_doy(unix)
     out = irradiance.erbs(a(weather['ghi']), a(zenith), doy)
     for key in expected:
         assert_allclose(_to_numpy(out[key]), expected[key])
@@ -116,7 +145,7 @@ def test_hsu_irregular_times(backend, weather):
     rain = weather['rain']
     expected = soiling.hsu(rain, 0.5, 20., 1e-2, 2e-2,
                            rain_accum_period=pd.Timedelta('2h'))
-    unix = a(_xa._datetime_to_number(rain.index, 'unix'))
+    unix = a(tools.datetime_to_unix(rain.index))
     out = soiling.hsu(a(rain), 0.5, 20., 1e-2, 2e-2, rain_accum_period=7200.,
                       times=unix)
     assert_allclose(_to_numpy(out), expected)
@@ -149,9 +178,8 @@ def _ac_power_pandas(weather, surface_tilt):
 
 
 def _ac_power_arrays(weather, surface_tilt, a):
-    xp = _xa.array_namespace(a([0.]))
-    unix = a(_xa._datetime_to_number(weather.index, 'unix'))
-    doy = _xa.unix_to_civil(unix, xp)[3]
+    unix = a(tools.datetime_to_unix(weather.index))
+    doy = tools.unix_to_doy(unix)
     return _ac_power(unix, doy, a(weather['ghi']), a(weather['temp_air']),
                      a(weather['wind_speed']), a(weather['rain']),
                      surface_tilt, rain_times=unix)
@@ -196,9 +224,30 @@ def test_time_series_chain_jax_jit_grad(weather):
     assert_allclose(energy(25.), _energy_derivative_fd(weather), rtol=1e-5)
 
 
+def test_jax_jit_with_arrays_made_outside(weather):
+    # inside jit, anything computed from arrays made outside it is traced
+    # too, so input checks must skip rather than read the values
+    jnp = _jax()
+    import jax
+    unix = jnp.asarray(tools.datetime_to_unix(weather.index))
+    rain = jnp.asarray(weather['rain'].to_numpy())
+
+    @jax.jit
+    def f(latitude):
+        zenith = solarposition.spa_python(unix, latitude, LON)['zenith']
+        ratio = soiling.hsu(rain, 0.5, 20., 1e-2, 2e-2, times=unix)
+        return zenith, ratio
+
+    zenith, ratio = f(LAT)
+    expected = solarposition.spa_python(weather.index, LAT, LON)['zenith']
+    assert_allclose(np.asarray(zenith), expected, atol=1e-9)
+    assert_allclose(np.asarray(ratio),
+                    soiling.hsu(weather['rain'], 0.5, 20., 1e-2, 2e-2))
+
+
 def test_spa_python_dask_stays_lazy(weather):
     da = pytest.importorskip('dask.array')
-    unix = da.from_array(_xa._datetime_to_number(weather.index, 'unix'),
+    unix = da.from_array(tools.datetime_to_unix(weather.index),
                          chunks=100)
     out = solarposition.spa_python(unix, LAT, LON)
     assert all(isinstance(v, da.Array) for v in out.values())
@@ -213,7 +262,7 @@ def test_hsu_ties_decided_the_same_on_every_library():
     rain = pd.Series(np.round(rng.uniform(0, 1, len(times))
                               * (rng.uniform(size=len(times)) > 0.8), 1),
                      index=times)
-    t = _xa._datetime_to_number(times, 'unix')
+    t = tools.datetime_to_unix(times)
     start = np.searchsorted(t, t - 3 * 3600., side='right')
     window_sums = [math.fsum(rain.values[s:i + 1])
                    for i, s in enumerate(start)]
@@ -254,7 +303,7 @@ def test_tz_aware_datetime_series_as_time():
 def test_spa_python_numeric_scalar_is_unix_seconds():
     t = pd.Timestamp('2026-06-01 19:00', tz='UTC')
     expected = solarposition.spa_python(t, LAT, LON)
-    out = solarposition.spa_python(_xa._datetime_to_number(t, 'unix'), LAT,
+    out = solarposition.spa_python(tools.datetime_to_unix(t), LAT,
                                    LON)
     assert_allclose(float(out['zenith']), expected['zenith'].iloc[0])
 

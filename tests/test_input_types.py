@@ -12,8 +12,8 @@ import pandas as pd
 import pytest
 from numpy.testing import assert_allclose
 
-from pvlib import (atmosphere, iam, inverter, irradiance, pvsystem,
-                   temperature, tools)
+from pvlib import (atmosphere, clearsky, iam, inverter, irradiance,
+                   pvsystem, temperature, tools)
 
 INDEX = pd.date_range('2026-06-01 06:00', periods=4, freq='3h',
                       tz='Etc/GMT+7')
@@ -98,6 +98,9 @@ CASES = {
     'iam.ashrae': (iam.ashrae, {'aoi': [0., 30., 60., 95.]}, {}, None),
     'iam.martin_ruiz': (
         iam.martin_ruiz, {'aoi': [0., 30., 60., 95.]}, {}, None),
+    'clearsky.haurwitz': (
+        clearsky.haurwitz, {'apparent_zenith': [20., 60., 89., 95.]}, {},
+        None),
     'atmosphere.get_relative_airmass': (
         atmosphere.get_relative_airmass, {'zenith': [20., 60., 89., 95.]},
         {}, None),

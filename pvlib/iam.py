@@ -303,7 +303,7 @@ def martin_ruiz(aoi, a_r=0.16):
 
     # a data-dependent check cannot run inside jax.jit, and would force
     # evaluation of a Dask array, so skip it there
-    if _xa.is_concrete(a_r) and xp.any(a_r <= 0):
+    if _xa.known_any(a_r <= 0, xp):
         raise ValueError("The parameter 'a_r' cannot be zero or negative.")
 
     with _xa.errstate(xp, invalid='ignore'):

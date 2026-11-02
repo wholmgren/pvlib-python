@@ -9,8 +9,8 @@ import pandas as pd
 import pytest
 from numpy.testing import assert_allclose
 
-from pvlib import (atmosphere, iam, inverter, irradiance, pvsystem,
-                   temperature, tools)
+from pvlib import (atmosphere, clearsky, iam, inverter, irradiance,
+                   pvsystem, temperature, tools)
 
 
 @pytest.fixture(autouse=True)
@@ -87,6 +87,7 @@ CASES = {
         30, 180, a(ZEN), a(AZI), a(DNI), a(GHI), a(DHI))['poa_global'],
     'get_relative_airmass': lambda a: atmosphere.get_relative_airmass(
         a(ZEN)),
+    'haurwitz': lambda a: clearsky.haurwitz(a(ZEN))['ghi'],
     'ashrae': lambda a: iam.ashrae(a(ZEN)),
     'martin_ruiz': lambda a: iam.martin_ruiz(a(ZEN)),
     'sapm_cell': lambda a: temperature.sapm_cell(
@@ -113,6 +114,15 @@ def test_dask_stays_lazy():
                                for v in (ZEN, AZI, DNI, GHI, DHI))
     out = irradiance.get_total_irradiance(30, 180, zen, azi, dni, ghi, dhi)
     assert all(isinstance(v, da.Array) for v in out.values())
+
+
+def test_dask_and_numpy_arrays_mix():
+    # Dask arrays are NumPy arrays computed lazily, so NumPy arrays join in
+    da = _dask()
+    zen = da.from_array(np.asarray(ZEN), chunks=2)
+    out = irradiance.aoi(30, 180, zen, np.asarray(AZI))
+    assert isinstance(out, da.Array)
+    assert_allclose(out.compute(), irradiance.aoi(30, 180, ZEN, AZI))
 
 
 def test_mixed_libraries_raise():
@@ -197,6 +207,15 @@ def test_torch_inverter_gradient_finite_at_zero_power():
     assert torch.isfinite(pdc.grad).all()
 
 
+def test_torch_haurwitz_gradient_finite_below_horizon():
+    torch = _torch()
+    zenith = torch.tensor([30., 90., 120.], dtype=torch.float64,
+                          requires_grad=True)
+    clearsky.haurwitz(zenith)['ghi'].sum().backward()
+    assert torch.isfinite(zenith.grad).all()
+    assert zenith.grad[1:].eq(0).all()
+
+
 def test_device_follows_largest_array():
     # a 0-d CPU tensor (torch.tensor(30.)) must not pull data off its device;
     # PyTorch's meta device stands in for a GPU here
@@ -215,6 +234,18 @@ def test_martin_ruiz_validates_eager_jax_but_not_traced():
     # inside jit the values are unknown, so the check is skipped
     jax.jit(lambda a_r: iam.martin_ruiz(jnp.asarray([10.]), a_r))(
         jnp.asarray(0.16))
+
+
+def test_xarray_unlabeled_arrays_broadcast_by_position():
+    xr = pytest.importorskip('xarray')
+    zen = xr.DataArray(ZEN, dims='time')
+    out = irradiance.aoi(30, 180, zen, np.asarray(AZI))
+    assert out.dims == ('time',)
+    assert_allclose(out, irradiance.aoi(30, 180, ZEN, AZI))
+    # as in xarray arithmetic, an unlabeled array may not add a dimension,
+    # which the result would have no name for
+    with pytest.raises(ValueError, match='Pass a DataArray'):
+        irradiance.aoi(np.array([[0.], [20.]]), 180, zen, 180)
 
 
 def test_xarray_joins_like_xarray_arithmetic():

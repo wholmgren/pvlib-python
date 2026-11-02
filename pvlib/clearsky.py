@@ -11,7 +11,7 @@ import pandas as pd
 from scipy.linalg import hankel
 import h5py
 
-from pvlib import atmosphere, tools
+from pvlib import _array_api as _xa, atmosphere, tools
 from pvlib.tools import _degrees_to_index
 
 
@@ -278,6 +278,7 @@ def _calendar_month_middles(year):
     return middles
 
 
+@_xa.labeled_io()
 def haurwitz(apparent_zenith):
     '''
     Determine clear sky GHI using the Haurwitz model.
@@ -290,15 +291,16 @@ def haurwitz(apparent_zenith):
 
     Parameters
     ----------
-    apparent_zenith : Series
+    apparent_zenith : numeric
         The apparent (refraction corrected) sun zenith angle
         in degrees.
 
     Returns
     -------
-    ghi : DataFrame
-        The modeled global horizonal irradiance in W/m^2 provided
-        by the Haurwitz clear-sky model.
+    data : dict or DataFrame
+        Contains the key/column ``ghi``, the modeled global horizonal
+        irradiance in W/m^2 provided by the Haurwitz clear-sky model.
+        A DataFrame for pandas input.
 
     References
     ----------
@@ -314,17 +316,13 @@ def haurwitz(apparent_zenith):
        Laboratories, SAND2012-2389, 2012.
     '''
 
-    cos_zenith = tools.cosd(apparent_zenith.values)
-    ghi_clear = np.zeros_like(apparent_zenith.values)
-    cos_zen_gte_0 = cos_zenith > 0
-    ghi_clear[cos_zen_gte_0] = (1098.0 * cos_zenith[cos_zen_gte_0] *
-                                np.exp(-0.059/cos_zenith[cos_zen_gte_0]))
-
-    df_out = pd.DataFrame(index=apparent_zenith.index,
-                          data=ghi_clear,
-                          columns=['ghi'])
-
-    return df_out
+    xp = _xa.array_namespace(apparent_zenith)
+    apparent_zenith, = _xa.asarrays(apparent_zenith, xp=xp)
+    cos_zenith = tools.cosd(apparent_zenith)
+    ghi_clear = _xa.where_safe(
+        cos_zenith > 0, cos_zenith,
+        lambda cos_zen: 1098.0 * cos_zen * xp.exp(-0.059 / cos_zen), 0., xp)
+    return {'ghi': ghi_clear}
 
 
 def simplified_solis(apparent_elevation, aod700=0.1, precipitable_water=1.,

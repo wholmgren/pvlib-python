@@ -1414,8 +1414,7 @@ def calculate_deltat(year, month):
     try:
         xp = _xa.array_namespace(year, month)
         # skip the check for lazy arrays, where it would force evaluation
-        if (_xa.is_concrete(year)
-                and xp.any((year > 3000) | (year < -1999))):
+        if _xa.known_any((year > 3000) | (year < -1999), xp):
             warnings.warn(plw)
     except ValueError:
         if (year > 3000) | (year < -1999):
