@@ -40,6 +40,9 @@ class SolarPosition:
     def time_spa_python(self, ndays):
         solarposition.spa_python(self.times_localized, self.lat, self.lon)
 
+    def peakmem_spa_python(self, ndays):
+        solarposition.spa_python(self.times_localized, self.lat, self.lon)
+
     def time_pyephem(self, ndays):
         solarposition.pyephem(self.times_localized, self.lat, self.lon)
 

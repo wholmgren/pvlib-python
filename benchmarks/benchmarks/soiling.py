@@ -33,6 +33,10 @@ class Hsu:
         soiling.hsu(self.rainfall, self.cleaning_threshold,
                     self.surface_tilt, self.pm2_5, self.pm10)
 
+    def peakmem_hsu(self, ndays):
+        soiling.hsu(self.rainfall, self.cleaning_threshold,
+                    self.surface_tilt, self.pm2_5, self.pm10)
+
     # the cost of a rolling window can grow with the number of points in it
     def time_hsu_24h_rain_accum_period(self, ndays):
         soiling.hsu(self.rainfall, self.cleaning_threshold,
