@@ -165,6 +165,7 @@ EXTRA_CASES = {
         max_zenith=80.),
 }
 
+
 # --- transposition, including the models that aren't ported -----------------
 
 def _transpose(model, kind='series', **kwargs):
@@ -331,8 +332,8 @@ def summarize(out):
         return {'type': 'MaskedArray', 'shape': list(out.shape),
                 'dtype': str(out.dtype),
                 'values': _array(np.ma.filled(out.astype(float), np.nan))}
-    if np.ndim(out) == 0 and isinstance(out, (int, float, np.generic,
-                                               np.ndarray)):
+    scalars = (int, float, np.generic, np.ndarray)
+    if np.ndim(out) == 0 and isinstance(out, scalars):
         # NumPy scalars and 0-d arrays alike
         return {'type': 'scalar', 'dtype': str(np.asarray(out).dtype),
                 'values': _array(out)}
