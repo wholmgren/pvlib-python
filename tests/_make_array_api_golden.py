@@ -5,6 +5,7 @@ Record what pvlib before the array API port returns for the calls in
 Run it with pvlib from before the port first on the path, for example the
 commit this branch started from::
 
+    mkdir /tmp/pvlib-main
     git archive <commit> pvlib | tar -x -C /tmp/pvlib-main
     PYTHONPATH=/tmp/pvlib-main python tests/_make_array_api_golden.py \\
         --source <commit>
