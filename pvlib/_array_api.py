@@ -5,6 +5,10 @@ standard, https://data-apis.org/array-api/latest/
 Model code is written once against an array namespace ``xp`` and then runs
 on any conforming array library (NumPy, CuPy, PyTorch, JAX, Dask, ...).
 
+The contributing guide shows how to port a function and explains the design:
+docs/sphinx/source/contributing/array_libraries.rst and
+array_libraries_design.rst.
+
 Cores and boundaries
 --------------------
 Each ported function is a core: it takes the namespace as ``xp`` and assumes

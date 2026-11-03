@@ -46,7 +46,8 @@ So far these functions accept arrays from other libraries:
 - soiling: :py:func:`~pvlib.soiling.hsu`
 
 Other functions take NumPy and pandas only. Given arrays from another
-library, they may fail with an unclear error.
+library, they may fail with an unclear error. To add a function to this
+list, see :ref:`contributing-array-libraries`.
 
 Type in, type out
 -----------------
