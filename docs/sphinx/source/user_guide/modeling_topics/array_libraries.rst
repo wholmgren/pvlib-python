@@ -69,10 +69,12 @@ arrays from another library     arrays from that library
 ==============================  ==============================================
 
 Scalars and datetimes mix with any of these. Arrays from two libraries don't
-mix, except NumPy arrays with Dask arrays, so convert first. The result has the common
-floating point type of the inputs, float64 if none is floating point, and is
-on the device of the largest input array. Dask arrays stay lazy: the result
-is computed when you call ``.compute()``.
+mix, except NumPy arrays with Dask arrays, so convert first. The result has
+the common floating point type of the inputs, float64 if none is floating
+point. Arrays on different devices raise ``ValueError``, except 0-d arrays,
+such as a tilt given as ``torch.tensor(30.)``, which move to the device of
+the others. Dask arrays stay lazy: the result is computed when you call
+``.compute()``.
 
 xarray
 ------
@@ -177,6 +179,33 @@ respect to thresholds such as ``cleaning_threshold`` in
 Input checks that need values, such as the check of ``a_r`` in
 :py:func:`~pvlib.iam.martin_ruiz`, are skipped inside ``jax.jit`` and for
 Dask arrays, whose values aren't known yet.
+
+SciPy
+-----
+
+The array API standard has no special functions.
+:py:func:`~pvlib.soiling.hsu` needs one, the error function, and gets it in
+one of two ways:
+
+- If SciPy's array API support is on, pvlib calls
+  :py:func:`scipy.special.erf`, and SciPy calls the error function of the
+  array's library.
+- Otherwise pvlib calls the error function of PyTorch, JAX or CuPy itself,
+  and SciPy's for NumPy, Dask and other libraries.
+
+The results are the same either way. SciPy's support is off unless the
+environment variable ``SCIPY_ARRAY_API`` is set to ``1`` before SciPy is
+first imported. pvlib imports SciPy, so set it before importing pvlib, or in
+the shell:
+
+.. code-block:: bash
+
+    export SCIPY_ARRAY_API=1
+
+Setting it after SciPy is imported has no effect. It also changes SciPy
+itself, whose functions then reject NumPy masked arrays, for example. See
+SciPy's `array API support
+<https://docs.scipy.org/doc/scipy/dev/api-dev/array_api.html>`_.
 
 Performance
 -----------

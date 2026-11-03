@@ -2,6 +2,8 @@
 Run array API ported functions on several array libraries and check that the
 array type comes back unchanged and that results match NumPy.
 """
+import os
+import subprocess
 import sys
 
 import numpy as np
@@ -9,6 +11,7 @@ import pandas as pd
 import pytest
 from numpy.testing import assert_allclose
 
+import pvlib
 from pvlib import (atmosphere, clearsky, iam, inverter, irradiance,
                    pvsystem, temperature, tools)
 
@@ -104,7 +107,7 @@ def test_type_in_type_out(backend, case):
     name, mod, a = backend
     expected = CASES[case](np.asarray)
     out = CASES[case](a)
-    assert type(out) is type(a([1.]))
+    assert isinstance(out, type(a([1.])))
     assert_allclose(_to_numpy(out), expected, equal_nan=True)
 
 
@@ -216,7 +219,7 @@ def test_torch_haurwitz_gradient_finite_below_horizon():
     assert zenith.grad[1:].eq(0).all()
 
 
-def test_device_follows_largest_array():
+def test_0d_arrays_move_to_the_device_of_the_data():
     # a 0-d CPU tensor (torch.tensor(30.)) must not pull data off its device;
     # PyTorch's meta device stands in for a GPU here
     torch = _torch()
@@ -224,6 +227,39 @@ def test_device_follows_largest_array():
     out = irradiance.aoi(torch.tensor(30., dtype=torch.float64), 180., zen,
                          torch.empty(3, dtype=torch.float64, device='meta'))
     assert out.device.type == 'meta'
+
+
+def test_arrays_on_different_devices_raise():
+    torch = _torch()
+    zen = torch.empty(3, dtype=torch.float64, device='meta')
+    azi = torch.zeros(3, dtype=torch.float64)
+    with pytest.raises(ValueError, match='different devices: meta, cpu'):
+        irradiance.aoi(30., 180., zen, azi)
+
+
+def test_erf_uses_scipy_special_when_scipy_array_api_is_on():
+    # SciPy reads SCIPY_ARRAY_API when it is first imported, so run in a new
+    # process, with the pvlib being tested
+    torch = _torch()  # noqa: F841
+    code = '\n'.join([
+        'from unittest import mock',
+        'import scipy.special, torch',
+        'from pvlib import _array_api as _xa',
+        'assert _xa.scipy_array_api()',
+        'x = torch.tensor([0.1, 0.5], dtype=torch.float64,'
+        ' requires_grad=True)',
+        'with mock.patch.object(scipy.special, "erf",'
+        ' wraps=scipy.special.erf) as erf:',
+        '    y = _xa.erf(x, _xa.array_namespace(x))',
+        'assert erf.call_count == 1',
+        'y.sum().backward()',
+        'assert torch.allclose(x.grad, 2 / torch.pi**0.5 * torch.exp(-x**2))',
+    ])
+    root = os.path.dirname(os.path.dirname(pvlib.__file__))
+    env = {**os.environ, 'SCIPY_ARRAY_API': '1',
+           'PYTHONPATH': os.pathsep.join(
+               [root, os.environ.get('PYTHONPATH', '')])}
+    subprocess.run([sys.executable, '-c', code], env=env, check=True)
 
 
 def test_martin_ruiz_validates_eager_jax_but_not_traced():

@@ -117,14 +117,15 @@ unspecified (`type promotion
 so converting first gives the same result on every library. float32 inputs
 stay float32, for users who want speed on a GPU.
 
-**The device of the largest array.** A user may pass the tilt as a 0-d CPU
-tensor, ``torch.tensor(30., requires_grad=True)``, with weather data on a GPU.
-Moving everything to the device of the largest array keeps the data where it
-is. The standard recommends raising on arrays from different devices
-(`device support
-<https://data-apis.org/array-api/latest/design_topics/device_support.html>`_).
-scikit-learn moves inputs to the library and device of one argument, ``X``
-for estimators; pvlib functions have no such argument, so size decides.
+**One device.** Arrays on different devices raise ``ValueError``, as the
+standard recommends (`device support
+<https://data-apis.org/array-api/latest/design_topics/device_support.html>`_):
+moving data between a GPU and the CPU is slow and easy to miss. 0-d arrays
+are the exception. A user may pass the tilt as
+``torch.tensor(30., requires_grad=True)``, which is on the CPU, with weather
+data on a GPU, and moving one number costs nothing. scikit-learn instead
+moves all inputs to the library and device of one argument, ``X`` for
+estimators; pvlib functions have no such argument.
 
 **Libraries don't mix,** except NumPy with Dask, since Dask arrays are NumPy
 arrays computed lazily, and xarray mixes them the same way: a grid may hold
@@ -242,13 +243,20 @@ and JAX's `sharp bits
 <https://docs.jax.dev/en/latest/notebooks/Common_Gotchas_in_JAX.html>`_.
 
 
+.. _array-design-dispatch:
+
 Why some helpers dispatch by library
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The standard has no special functions. ``scipy.special`` dispatches to
-PyTorch, JAX and CuPy only when the environment variable ``SCIPY_ARRAY_API``
-is set before SciPy is imported, so ``_xa.erf`` calls each library's own
-``erf``. ``_xa.errstate`` exists because ``np.errstate`` is NumPy's alone.
+The standard has no special functions. ``scipy.special`` calls the
+functions of the array's library only when SciPy's array API support is on,
+which takes the environment variable ``SCIPY_ARRAY_API`` set before SciPy is
+first imported. So ``_xa.erf`` uses ``scipy.special.erf`` when SciPy's
+support is on, and otherwise calls the ``erf`` of PyTorch, JAX or CuPy
+itself. SciPy reads the variable only once, so ``_xa.scipy_array_api``
+asks SciPy whether its support is on, through a private SciPy name, rather
+than reading the environment. pvlib's CI runs the tests both ways.
+``_xa.errstate`` exists because ``np.errstate`` is NumPy's alone.
 
 numba compiles NumPy code only. To keep a single copy of the solar position
 formulas, ``spa._formulas(xp)`` runs the Python source of the numba
@@ -326,14 +334,12 @@ Open questions
 - **Documenting support.** A decorator like SciPy's ``xp_capabilities``
   could build the list of supported functions and libraries, and the test
   marks, from one place.
-- **Devices.** Raise on arrays from different devices, as the standard
-  recommends, except for 0-d arrays?
 - **A switch.** SciPy and scikit-learn make users turn support on. pvlib
   doesn't, since NumPy and pandas users get the same results apart from the
   changes described above. Whether an experimental feature should still be
   opt-in is open.
-- **Special functions.** Use ``scipy.special`` once SciPy's support no longer
-  needs ``SCIPY_ARRAY_API``.
+- **Special functions.** Drop pvlib's own dispatch once SciPy's support no
+  longer needs ``SCIPY_ARRAY_API``.
 - **Scalar overhead.** A fast path in the boundary for calls whose
   arguments are all scalars.
 

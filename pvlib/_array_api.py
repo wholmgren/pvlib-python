@@ -43,7 +43,6 @@ import contextlib
 import datetime
 import functools
 import inspect
-import math
 
 import numpy as np
 import pandas as pd
@@ -83,9 +82,9 @@ def asarrays(*xs, xp):
     Convert ``xs`` to floating-point arrays with a common dtype and device.
 
     The dtype is the promoted dtype of the floating-point array inputs, or
-    float64 if there are none. The device is that of the largest array, so a
-    0-d CPU tensor does not pull GPU data to the CPU. Masked values of NumPy
-    masked arrays become NaN, so their fill values never enter a calculation
+    float64 if there are none. The device is that of the arrays, see
+    :py:func:`common_device`. Masked values of NumPy masked arrays become
+    NaN, so their fill values never enter a calculation
     (:py:func:`labeled_io` restores the mask). ``None`` passes through.
     """
     if xp is np_compat:
@@ -98,22 +97,41 @@ def asarrays(*xs, xp):
               and not isinstance(x, np.generic)]
     floats = [x for x in arrays if xp.isdtype(x.dtype, 'real floating')]
     dtype = xp.result_type(*floats) if floats else xp.float64
-    device = (array_api_compat.device(max(arrays, key=_size)) if arrays
-              else None)
+    device = common_device(arrays)
     return tuple(None if x is None else
                  xp.asarray(x, dtype=dtype, device=device) for x in xs)
+
+
+def common_device(arrays):
+    """
+    The device of ``arrays``, or None if there are none.
+
+    Arrays on different devices raise ``ValueError``, as the array API
+    standard recommends, since moving data between devices is slow and easy
+    to miss. 0-d arrays are the exception: they move to the device of the
+    others, so a tilt given as ``torch.tensor(30.)`` on the CPU works with
+    data on a GPU.
+    """
+    devices = []
+    for x in arrays:
+        # None for arrays traced by jax.jit
+        device = array_api_compat.device(x) if x.ndim > 0 else None
+        if device is not None and device not in devices:
+            devices.append(device)
+    if len(devices) > 1:
+        raise ValueError(
+            'arrays are on different devices: '
+            f'{", ".join(str(d) for d in devices)}. Move them to one '
+            'device; only 0-d arrays are moved for you.')
+    if devices:
+        return devices[0]
+    return array_api_compat.device(arrays[0]) if arrays else None
 
 
 def _np_asarray(x, dtype):
     if isinstance(x, np.ma.MaskedArray):
         return np.ma.filled(x.astype(dtype), np.nan)
     return np.asarray(x, dtype=dtype)
-
-
-def _size(x):
-    # None for lazy arrays of unknown size, which are likely large
-    n = array_api_compat.size(x)
-    return math.inf if n is None else n
 
 
 def is_concrete(x):
@@ -223,7 +241,7 @@ def _times_follow_data(arguments, times):
     xp = array_namespace(*others)
     if xp is np_compat:
         return
-    device = array_api_compat.device(max(others, key=_size))
+    device = common_device(others)
     for k in times:
         if isinstance(arguments[k], np.ndarray):
             arguments[k] = xp.asarray(arguments[k], device=device)
@@ -307,8 +325,34 @@ def where_safe(cond, x, f, fill_value, xp, safe=1.):
     return xp.where(cond, f(xp.where(cond, x, safe)), fill_value)
 
 
+def scipy_array_api():
+    """
+    True if SciPy's array API support is on, so that ``scipy.special``
+    calls the functions of the array's library.
+
+    SciPy reads the environment variable ``SCIPY_ARRAY_API`` once, when it is
+    first imported, so this asks SciPy rather than the environment. It uses
+    a private SciPy name; if that moves, the answer is False and pvlib
+    dispatches special functions itself.
+    """
+    try:
+        from scipy._lib import _array_api
+    except ImportError:
+        return False
+    return bool(getattr(_array_api, 'SCIPY_ARRAY_API', False))
+
+
 def erf(x, xp):
-    """The error function, which the standard does not include."""
+    """
+    The error function, which the standard does not include.
+
+    ``scipy.special.erf`` when :py:func:`scipy_array_api` is True; otherwise
+    the error function of PyTorch, JAX or CuPy for their arrays, and SciPy's
+    for others.
+    """
+    if scipy_array_api():
+        import scipy.special
+        return scipy.special.erf(x)
     if array_api_compat.is_torch_namespace(xp):
         import torch
         return torch.special.erf(x)

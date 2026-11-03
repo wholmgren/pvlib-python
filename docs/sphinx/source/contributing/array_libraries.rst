@@ -137,6 +137,11 @@ NumPy                                      In a core
 ``scipy.special.erf``                      ``_xa.erf(x, xp)``
 =========================================  ==========================================
 
+For another special function, add a helper like ``_xa.erf``: it uses
+``scipy.special`` when SciPy's array API support is on
+(``_xa.scipy_array_api()``), and otherwise the function of each library.
+(:ref:`why <array-design-dispatch>`)
+
 **Don't modify arrays in place.** JAX arrays can't be modified. Write
 ``x = xp.where(mask, 0., x)`` instead of ``x[mask] = 0``.
 
@@ -240,14 +245,17 @@ Add tests of your own where the function needs them:
   ``test_martin_ruiz_validates_eager_jax_but_not_traced``;
 - a function that takes time: tests in ``tests/test_array_api_time.py``.
 
-pvlib's continuous integration doesn't install these libraries yet, so run
-the tests locally. Libraries that aren't installed are skipped; ``-rs``
-lists the skips.
+A CI job, ``array libraries`` in ``.github/workflows/pytest.yml``, installs
+these libraries and runs the whole test suite twice: with SciPy's array API
+support off, and on (``SCIPY_ARRAY_API=1``). The other CI jobs don't install
+them. Locally, libraries that aren't installed are skipped; ``-rs`` lists
+the skips.
 
 .. code-block:: bash
 
     pip install -e ".[test]" array-api-strict torch jax "dask[array]" xarray
     pytest tests/test_array_api*.py tests/test_input_types.py -rs
+    SCIPY_ARRAY_API=1 pytest tests/test_array_api*.py tests/test_input_types.py -rs
 
 For benchmarks, add a ``time_`` method to the ``InputTypes`` class in the
 module's file in ``benchmarks/benchmarks``, such as ``IAMInputTypes`` in
@@ -291,6 +299,8 @@ Helper reference
 
 .. autofunction:: erf
 
+.. autofunction:: scipy_array_api
+
 .. autofunction:: unix_to_civil
 
 .. autofunction:: rolling_sum
@@ -300,3 +310,5 @@ Helper reference
 .. autofunction:: array_namespace
 
 .. autofunction:: asarrays
+
+.. autofunction:: common_device
