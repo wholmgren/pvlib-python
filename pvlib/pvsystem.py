@@ -3050,10 +3050,13 @@ def scale_voltage_current_power(data, voltage=1, current=1):
     return df_sorted
 
 
-@_xa.labeled_io(name=lambda arguments: (
-    None if arguments['k'] is not None else _xa.labeled_io.INFER))
+@_xa.labeled_io(
+    name=lambda arguments: (
+        None if arguments['k'] is not None else _xa.labeled_io.INFER),
+    arrays=('effective_irradiance', 'temp_cell', 'pdc0', 'gamma_pdc',
+            'temp_ref', 'k'))
 def pvwatts_dc(effective_irradiance, temp_cell, pdc0, gamma_pdc, temp_ref=25.,
-               k=None, cap_adjustment=False):
+               k=None, cap_adjustment=False, *, xp):
     r"""
     Implement NLR's PVWatts (Version 5) DC power model.
 
@@ -3131,12 +3134,6 @@ def pvwatts_dc(effective_irradiance, temp_cell, pdc0, gamma_pdc, temp_ref=25.,
        :doi:`10.1109/PVSC.2008.4922586`.
        Pre-print: :doi:`10.1109/PVSC.2008.4922586`
     """  # noqa: E501
-
-    xp = _xa.array_namespace(effective_irradiance, temp_cell, pdc0,
-                             gamma_pdc, temp_ref, k)
-    effective_irradiance, temp_cell, pdc0, gamma_pdc, temp_ref, k = \
-        _xa.asarrays(effective_irradiance, temp_cell, pdc0, gamma_pdc,
-                     temp_ref, k, xp=xp)
 
     pdc = (effective_irradiance * 0.001 * pdc0 *
            (1 + gamma_pdc * (temp_cell - temp_ref)))

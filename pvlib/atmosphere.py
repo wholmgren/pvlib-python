@@ -132,8 +132,8 @@ def get_absolute_airmass(airmass_relative, pressure=101325.):
     return airmass_absolute
 
 
-@_xa.labeled_io(name=None)
-def get_relative_airmass(zenith, model='kastenyoung1989'):
+@_xa.labeled_io(name=None, arrays=('zenith',))
+def get_relative_airmass(zenith, model='kastenyoung1989', *, xp):
     '''
     Calculate relative (not pressure-adjusted) airmass at sea level.
 
@@ -221,9 +221,6 @@ def get_relative_airmass(zenith, model='kastenyoung1989'):
        :doi:`10.2172/1039404`
 
     '''
-
-    xp = _xa.array_namespace(zenith)
-    zenith, = _xa.asarrays(zenith, xp=xp)
 
     # set zenith values greater than 90 to nans
     z = xp.where(zenith > 90, xp.nan, zenith)

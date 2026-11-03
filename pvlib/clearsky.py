@@ -278,8 +278,8 @@ def _calendar_month_middles(year):
     return middles
 
 
-@_xa.labeled_io()
-def haurwitz(apparent_zenith):
+@_xa.labeled_io(arrays=('apparent_zenith',))
+def haurwitz(apparent_zenith, *, xp):
     '''
     Determine clear sky GHI using the Haurwitz model.
 
@@ -316,9 +316,7 @@ def haurwitz(apparent_zenith):
        Laboratories, SAND2012-2389, 2012.
     '''
 
-    xp = _xa.array_namespace(apparent_zenith)
-    apparent_zenith, = _xa.asarrays(apparent_zenith, xp=xp)
-    cos_zenith = tools.cosd(apparent_zenith)
+    cos_zenith = tools._cosd(apparent_zenith, xp)
     ghi_clear = _xa.where_safe(
         cos_zenith > 0, cos_zenith,
         lambda cos_zen: 1098.0 * cos_zen * xp.exp(-0.059 / cos_zen), 0., xp)

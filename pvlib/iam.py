@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import functools
 from scipy.optimize import minimize
-from pvlib.tools import cosd, sind, acosd
+from pvlib.tools import cosd, sind, acosd, _cosd
 from pvlib._deprecation import warn_deprecated
 from pvlib import _array_api as _xa
 from scipy.interpolate import make_interp_spline, interp1d
@@ -28,8 +28,8 @@ _IAM_MODEL_PARAMS = {
 }
 
 
-@_xa.labeled_io(name=None)
-def ashrae(aoi, b=0.05):
+@_xa.labeled_io(name=None, arrays=('aoi', 'b'))
+def ashrae(aoi, b=0.05, *, xp):
     r"""
     Determine the incidence angle modifier using the ASHRAE transmission
     model.
@@ -84,10 +84,7 @@ def ashrae(aoi, b=0.05):
     pvlib.iam.interp
     """
 
-    xp = _xa.array_namespace(aoi, b)
-    aoi, b = _xa.asarrays(aoi, b, xp=xp)
-
-    iam = 1 - b * (1 / cosd(aoi) - 1)
+    iam = 1 - b * (1 / _cosd(aoi, xp) - 1)
     # comparisons with NaN are False, so NaN aoi gives NaN iam
     iam = xp.where(xp.abs(aoi) >= 90, 0., iam)
     iam = xp.maximum(0., iam)
@@ -235,8 +232,8 @@ def physical(aoi, n=1.526, K=4.0, L=0.002, *, n_ar=None):
     return iam
 
 
-@_xa.labeled_io(name=None)
-def martin_ruiz(aoi, a_r=0.16):
+@_xa.labeled_io(name=None, arrays=('aoi', 'a_r'))
+def martin_ruiz(aoi, a_r=0.16, *, xp):
     r'''
     Determine the incidence angle modifier (IAM) using the Martin
     and Ruiz incident angle model.
@@ -298,16 +295,13 @@ def martin_ruiz(aoi, a_r=0.16):
     '''
     # Contributed by Anton Driesse (@adriesse), PV Performance Labs. July, 2019
 
-    xp = _xa.array_namespace(aoi, a_r)
-    aoi, a_r = _xa.asarrays(aoi, a_r, xp=xp)
-
     # a data-dependent check cannot run inside jax.jit, and would force
     # evaluation of a Dask array, so skip it there
     if _xa.known_any(a_r <= 0, xp):
         raise ValueError("The parameter 'a_r' cannot be zero or negative.")
 
     with _xa.errstate(xp, invalid='ignore'):
-        iam = (1 - xp.exp(-cosd(aoi) / a_r)) / (1 - xp.exp(-1 / a_r))
+        iam = (1 - xp.exp(-_cosd(aoi, xp) / a_r)) / (1 - xp.exp(-1 / a_r))
         iam = xp.where(xp.abs(aoi) >= 90.0, 0.0, iam)
 
     return iam

@@ -334,8 +334,8 @@ def adr(v_dc, p_dc, inverter, vtol=0.10):
     return power_ac
 
 
-@_xa.labeled_io()
-def pvwatts(pdc, pdc0, eta_inv_nom=0.96, eta_inv_ref=0.9637):
+@_xa.labeled_io(arrays=('pdc', 'pdc0', 'eta_inv_nom', 'eta_inv_ref'))
+def pvwatts(pdc, pdc0, eta_inv_nom=0.96, eta_inv_ref=0.9637, *, xp):
     r"""
     NLR's PVWatts inverter model.
 
@@ -393,10 +393,6 @@ def pvwatts(pdc, pdc0, eta_inv_nom=0.96, eta_inv_ref=0.9637):
     .. [1] A. P. Dobos, "PVWatts Version 5 Manual", NREL, Golden, CO, USA,
        Technical Report NREL/TP-6A20-62641, 2014, :doi:`10.2172/1158421`.
     """
-
-    xp = _xa.array_namespace(pdc, pdc0, eta_inv_nom, eta_inv_ref)
-    pdc, pdc0, eta_inv_nom, eta_inv_ref = _xa.asarrays(
-        pdc, pdc0, eta_inv_nom, eta_inv_ref, xp=xp)
 
     pac0 = eta_inv_nom * pdc0
     zeta = pdc / pdc0

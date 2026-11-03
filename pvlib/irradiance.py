@@ -119,12 +119,12 @@ def get_extra_radiation(datetime_or_doy, solar_constant=1366.1,
     return Ea
 
 
-@_xa.labeled_io(name=None, time={'datetime_or_doy': 'doy'})
-def _extra_radiation_from_doy(datetime_or_doy, solar_constant, method):
+@_xa.labeled_io(name=None, arrays=('datetime_or_doy', 'solar_constant'),
+                time={'datetime_or_doy': 'doy'})
+def _extra_radiation_from_doy(datetime_or_doy, solar_constant, method, *,
+                              xp):
     # datetime_or_doy is the day of year here, from labeled_io
-    xp = _xa.array_namespace(datetime_or_doy, solar_constant)
-    doy, solar_constant = _xa.asarrays(datetime_or_doy, solar_constant,
-                                       xp=xp)
+    doy = datetime_or_doy
     if method == 'asce':
         B = solarposition._calculate_simple_day_angle(doy, offset=0)
         RoverR0sqrd = 1 + 0.033 * xp.cos(B)
@@ -175,8 +175,10 @@ def _handle_extra_radiation_types(datetime_or_doy, epoch_year):
     return to_doy, to_datetimeindex, to_output
 
 
-@_xa.labeled_io('aoi_projection')
-def aoi_projection(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth):
+@_xa.labeled_io('aoi_projection', arrays=(
+    'surface_tilt', 'surface_azimuth', 'solar_zenith', 'solar_azimuth'))
+def aoi_projection(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth,
+                   *, xp):
     """
     Calculates the dot product of the sun position unit vector and the surface
     normal unit vector; in other words, the cosine of the angle of incidence.
@@ -207,15 +209,10 @@ def aoi_projection(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth):
         See :term:`aoi_projection`.
     """
 
-    xp = _xa.array_namespace(surface_tilt, surface_azimuth,
-                             solar_zenith, solar_azimuth)
-    surface_tilt, surface_azimuth, solar_zenith, solar_azimuth = _xa.asarrays(
-        surface_tilt, surface_azimuth, solar_zenith, solar_azimuth, xp=xp)
-
     projection = (
-        tools.cosd(surface_tilt) * tools.cosd(solar_zenith) +
-        tools.sind(surface_tilt) * tools.sind(solar_zenith) *
-        tools.cosd(solar_azimuth - surface_azimuth))
+        tools._cosd(surface_tilt, xp) * tools._cosd(solar_zenith, xp) +
+        tools._sind(surface_tilt, xp) * tools._sind(solar_zenith, xp) *
+        tools._cosd(solar_azimuth - surface_azimuth, xp))
 
     # GH 1185
     projection = xp.clip(projection, -1., 1.)
@@ -223,8 +220,9 @@ def aoi_projection(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth):
     return projection
 
 
-@_xa.labeled_io('aoi')
-def aoi(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth):
+@_xa.labeled_io('aoi', arrays=(
+    'surface_tilt', 'surface_azimuth', 'solar_zenith', 'solar_azimuth'))
+def aoi(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth, *, xp):
     """
     Calculates the angle of incidence of the solar vector on a surface.
     This is the angle between the solar vector and the surface normal.
@@ -248,16 +246,17 @@ def aoi(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth):
         Angle of incidence, see :term:`aoi`. [°]
     """
 
-    projection = aoi_projection(surface_tilt, surface_azimuth,
-                                solar_zenith, solar_azimuth)
-    aoi_value = tools.acosd(projection)
+    projection = aoi_projection.core(surface_tilt, surface_azimuth,
+                                     solar_zenith, solar_azimuth, xp=xp)
+    aoi_value = tools._acosd(projection, xp)
 
     return aoi_value
 
 
-@_xa.labeled_io()
+@_xa.labeled_io(arrays=('surface_tilt', 'surface_azimuth', 'solar_zenith',
+                        'solar_azimuth', 'dni'))
 def beam_component(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth,
-                   dni):
+                   dni, *, xp):
     """
     Calculates the beam component of the plane of array irradiance.
 
@@ -279,24 +278,23 @@ def beam_component(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth,
     beam : numeric
         Beam component. [Wm⁻²]
     """
-    xp = _xa.array_namespace(surface_tilt, surface_azimuth, solar_zenith,
-                             solar_azimuth, dni)
-    dni, = _xa.asarrays(dni, xp=xp)
-    beam = dni * aoi_projection(surface_tilt, surface_azimuth,
-                                solar_zenith, solar_azimuth)
+    beam = dni * aoi_projection.core(surface_tilt, surface_azimuth,
+                                     solar_zenith, solar_azimuth, xp=xp)
     beam = xp.maximum(beam, 0.)
 
     return beam
 
 
-@_xa.labeled_io()
+@_xa.labeled_io(arrays=('surface_tilt', 'surface_azimuth', 'solar_zenith',
+                        'solar_azimuth', 'dni', 'ghi', 'dhi', 'dni_extra',
+                        'airmass', 'albedo'))
 def get_total_irradiance(surface_tilt, surface_azimuth,
                          solar_zenith, solar_azimuth,
                          dni, ghi, dhi, dni_extra=None, airmass=None,
                          albedo=0.25, surface_type=None,
                          model='isotropic',
                          model_perez='allsitescomposite1990',
-                         diffuse_components=False):
+                         diffuse_components=False, *, xp):
     r"""
     Determine total in-plane irradiance and its beam, sky diffuse and ground
     reflected components, using the specified sky diffuse irradiance model.
@@ -375,24 +373,29 @@ def get_total_irradiance(surface_tilt, surface_azimuth,
     using the defaults in :py:func:`~pvlib.atmosphere.get_relative_airmass`.
     """
 
-    poa_sky_diffuse = get_sky_diffuse(
+    poa_sky_diffuse = get_sky_diffuse.core(
         surface_tilt, surface_azimuth, solar_zenith, solar_azimuth,
         dni, ghi, dhi, dni_extra=dni_extra, airmass=airmass, model=model,
-        model_perez=model_perez, return_components=diffuse_components)
+        model_perez=model_perez, return_components=diffuse_components, xp=xp)
 
-    poa_ground_diffuse = get_ground_diffuse(surface_tilt, ghi, albedo,
-                                            surface_type)
-    aoi_ = aoi(surface_tilt, surface_azimuth, solar_zenith, solar_azimuth)
-    irrads = poa_components(aoi_, dni, poa_sky_diffuse, poa_ground_diffuse)
+    poa_ground_diffuse = get_ground_diffuse.core(surface_tilt, ghi, albedo,
+                                                 surface_type, xp=xp)
+    aoi_ = aoi.core(surface_tilt, surface_azimuth, solar_zenith,
+                    solar_azimuth, xp=xp)
+    irrads = poa_components.core(aoi_, dni, poa_sky_diffuse,
+                                 poa_ground_diffuse, xp=xp)
     return irrads
 
 
+@_xa.labeled_io(arrays=('surface_tilt', 'surface_azimuth', 'solar_zenith',
+                        'solar_azimuth', 'dni', 'ghi', 'dhi', 'dni_extra',
+                        'airmass'))
 def get_sky_diffuse(surface_tilt, surface_azimuth,
                     solar_zenith, solar_azimuth,
                     dni, ghi, dhi, dni_extra=None, airmass=None,
                     model='isotropic',
                     model_perez='allsitescomposite1990',
-                    return_components=False):
+                    return_components=False, *, xp):
     r"""
     Determine in-plane sky diffuse irradiance component
     using the specified sky diffuse irradiance model.
@@ -484,14 +487,15 @@ def get_sky_diffuse(surface_tilt, surface_azimuth,
         raise ValueError(f'dni_extra is required for model {model}')
 
     if model == 'isotropic':
-        sky = isotropic(surface_tilt, dhi, return_components=return_components)
+        sky = isotropic.core(surface_tilt, dhi,
+                             return_components=return_components, xp=xp)
     elif model == 'klucher':
         sky = klucher(surface_tilt, surface_azimuth, dhi, ghi,
                       solar_zenith, solar_azimuth)
     elif model == 'haydavies':
-        sky = haydavies(surface_tilt, surface_azimuth, dhi, dni, dni_extra,
-                        solar_zenith, solar_azimuth,
-                        return_components=return_components)
+        sky = haydavies.core(surface_tilt, surface_azimuth, dhi, dni,
+                             dni_extra, solar_zenith, solar_azimuth,
+                             return_components=return_components, xp=xp)
     elif model == 'reindl':
         sky = reindl(surface_tilt, surface_azimuth, dhi, dni, ghi, dni_extra,
                      solar_zenith, solar_azimuth,
@@ -500,7 +504,8 @@ def get_sky_diffuse(surface_tilt, surface_azimuth,
         sky = king(surface_tilt, dhi, ghi, solar_zenith)
     elif model == 'perez':
         if airmass is None:
-            airmass = atmosphere.get_relative_airmass(solar_zenith)
+            airmass = atmosphere.get_relative_airmass.core(solar_zenith,
+                                                           xp=xp)
         sky = perez(surface_tilt, surface_azimuth, dhi, dni, dni_extra,
                     solar_zenith, solar_azimuth, airmass,
                     model=model_perez, return_components=return_components)
@@ -515,8 +520,9 @@ def get_sky_diffuse(surface_tilt, surface_azimuth,
     return sky
 
 
-@_xa.labeled_io()
-def poa_components(aoi, dni, poa_sky_diffuse, poa_ground_diffuse):
+@_xa.labeled_io(arrays=('aoi', 'dni', 'poa_sky_diffuse',
+                        'poa_ground_diffuse'))
+def poa_components(aoi, dni, poa_sky_diffuse, poa_ground_diffuse, *, xp):
     r'''
     Determine in-plane irradiance components.
 
@@ -572,10 +578,7 @@ def poa_components(aoi, dni, poa_sky_diffuse, poa_ground_diffuse):
         sky_components = {}
         total_poa_sky_diffuse = poa_sky_diffuse
 
-    xp = _xa.array_namespace(aoi, dni, total_poa_sky_diffuse,
-                             poa_ground_diffuse)
-    aoi, dni = _xa.asarrays(aoi, dni, xp=xp)
-    poa_direct = xp.maximum(dni * tools.cosd(aoi), 0.)
+    poa_direct = xp.maximum(dni * tools._cosd(aoi, xp), 0.)
     poa_diffuse = total_poa_sky_diffuse + poa_ground_diffuse
     poa_global = poa_direct + poa_diffuse
 
@@ -591,8 +594,10 @@ def poa_components(aoi, dni, poa_sky_diffuse, poa_ground_diffuse):
     return irrads
 
 
-@_xa.labeled_io('poa_ground_diffuse')
-def get_ground_diffuse(surface_tilt, ghi, albedo=.25, surface_type=None):
+@_xa.labeled_io('poa_ground_diffuse',
+                arrays=('surface_tilt', 'ghi', 'albedo'))
+def get_ground_diffuse(surface_tilt, ghi, albedo=.25, surface_type=None, *,
+                       xp):
     r'''
     Estimate diffuse irradiance on a tilted surface from ground reflections.
 
@@ -650,19 +655,16 @@ def get_ground_diffuse(surface_tilt, ghi, albedo=.25, surface_type=None):
     if surface_type is not None:
         albedo = pvlib.albedo.SURFACE_ALBEDOS[surface_type]
 
-    xp = _xa.array_namespace(surface_tilt, ghi, albedo)
-    surface_tilt, ghi, albedo = _xa.asarrays(surface_tilt, ghi, albedo, xp=xp)
-
     poa_ground_diffuse = (
         ghi * albedo *
-        (1 - tools.cosd(surface_tilt)) * 0.5
+        (1 - tools._cosd(surface_tilt, xp)) * 0.5
     )
 
     return poa_ground_diffuse
 
 
-@_xa.labeled_io()
-def isotropic(surface_tilt, dhi, return_components=False):
+@_xa.labeled_io(arrays=('surface_tilt', 'dhi'))
+def isotropic(surface_tilt, dhi, return_components=False, *, xp):
     r'''
     Determine diffuse irradiance from the sky on a tilted surface using
     the isotropic sky model.
@@ -722,10 +724,7 @@ def isotropic(surface_tilt, dhi, return_components=False):
        Energy vol. 201. pp. 8-12
        :doi:`10.1016/j.solener.2020.02.067`
     '''
-    xp = _xa.array_namespace(surface_tilt, dhi)
-    surface_tilt, dhi = _xa.asarrays(surface_tilt, dhi, xp=xp)
-
-    poa_sky_diffuse = dhi * (1 + tools.cosd(surface_tilt)) * 0.5
+    poa_sky_diffuse = dhi * (1 + tools._cosd(surface_tilt, xp)) * 0.5
 
     if return_components:
         diffuse_components = {
@@ -829,10 +828,12 @@ def klucher(surface_tilt, surface_azimuth, dhi, ghi, solar_zenith,
     return poa_sky_diffuse
 
 
-@_xa.labeled_io()
+@_xa.labeled_io(arrays=('surface_tilt', 'surface_azimuth', 'dhi', 'dni',
+                        'dni_extra', 'solar_zenith', 'solar_azimuth',
+                        'projection_ratio'))
 def haydavies(surface_tilt, surface_azimuth, dhi, dni, dni_extra,
               solar_zenith=None, solar_azimuth=None, projection_ratio=None,
-              return_components=False):
+              return_components=False, *, xp):
     r'''
     Determine diffuse irradiance from the sky on a tilted surface using the
     Hay and Davies (1980) model.
@@ -933,18 +934,12 @@ def haydavies(surface_tilt, surface_azimuth, dhi, dni, dni_extra,
        :doi:`10.1016/j.solener.2006.03.009`
     '''
 
-    xp = _xa.array_namespace(surface_tilt, surface_azimuth, dhi, dni,
-                             dni_extra, solar_zenith, solar_azimuth,
-                             projection_ratio)
-    surface_tilt, dhi, dni, dni_extra, projection_ratio = _xa.asarrays(
-        surface_tilt, dhi, dni, dni_extra, projection_ratio, xp=xp)
-
     # if necessary, calculate ratio of titled and horizontal beam irradiance
     if projection_ratio is None:
-        cos_tt = aoi_projection(surface_tilt, surface_azimuth,
-                                solar_zenith, solar_azimuth)
+        cos_tt = aoi_projection.core(surface_tilt, surface_azimuth,
+                                     solar_zenith, solar_azimuth, xp=xp)
         cos_tt = xp.maximum(cos_tt, 0.)  # GH 526
-        cos_solar_zenith = tools.cosd(solar_zenith)
+        cos_solar_zenith = tools._cosd(solar_zenith, xp)
         Rb = cos_tt / xp.maximum(cos_solar_zenith, 0.01745)  # GH 432
     else:
         Rb = projection_ratio
@@ -954,7 +949,7 @@ def haydavies(surface_tilt, surface_azimuth, dhi, dni, dni_extra,
 
     # these are the () and [] sub-terms of the second term of eqn 7
     term1 = 1 - AI
-    term2 = 0.5 * (1 + tools.cosd(surface_tilt))
+    term2 = 0.5 * (1 + tools._cosd(surface_tilt, xp))
 
     poa_isotropic = xp.maximum(dhi * term1 * term2, 0.)
     poa_circumsolar = xp.maximum(dhi * (AI * Rb), 0.)
@@ -1824,9 +1819,9 @@ def clearsky_index(ghi, ghi_clear, max_clearsky_index=2.0):
     return clearsky_index
 
 
-@_xa.labeled_io()
+@_xa.labeled_io(arrays=('ghi', 'solar_zenith', 'extra_radiation'))
 def clearness_index(ghi, solar_zenith, extra_radiation, min_cos_zenith=0.065,
-                    max_clearness_index=2.0):
+                    max_clearness_index=2.0, *, xp):
     """
     Calculate the clearness index.
 
@@ -1866,11 +1861,7 @@ def clearness_index(ghi, solar_zenith, extra_radiation, min_cos_zenith=0.065,
            Report No. SERI/TR-215-3087, Golden, CO: Solar Energy Research
            Institute, 1987.
     """
-    xp = _xa.array_namespace(ghi, solar_zenith, extra_radiation)
-    ghi, solar_zenith, extra_radiation = _xa.asarrays(
-        ghi, solar_zenith, extra_radiation, xp=xp)
-
-    cos_zenith = tools.cosd(solar_zenith)
+    cos_zenith = tools._cosd(solar_zenith, xp)
     I0h = extra_radiation * xp.maximum(cos_zenith, min_cos_zenith)
     # consider adding
     # with np.errstate(invalid='ignore', divide='ignore'):
@@ -2759,8 +2750,10 @@ def _gti_dirint_gte_90_kt_prime(aoi, solar_zenith, solar_azimuth, times,
     return kt_prime_gte_90
 
 
-@_xa.labeled_io(time={'datetime_or_doy': 'doy'})
-def erbs(ghi, zenith, datetime_or_doy, min_cos_zenith=0.065, max_zenith=87):
+@_xa.labeled_io(arrays=('ghi', 'zenith', 'datetime_or_doy'),
+                time={'datetime_or_doy': 'doy'})
+def erbs(ghi, zenith, datetime_or_doy, min_cos_zenith=0.065, max_zenith=87, *,
+         xp):
     r"""
     Estimate DNI and DHI from GHI using the Erbs model.
 
@@ -2823,13 +2816,13 @@ def erbs(ghi, zenith, datetime_or_doy, min_cos_zenith=0.065, max_zenith=87):
     """
 
     # datetime_or_doy is the day of year here, from labeled_io
-    xp = _xa.array_namespace(ghi, zenith, datetime_or_doy)
-    ghi, zenith, doy = _xa.asarrays(ghi, zenith, datetime_or_doy, xp=xp)
+    # get_extra_radiation(doy), with its default solar constant and method
+    dni_extra = _extra_radiation_from_doy.core(datetime_or_doy, 1366.1,
+                                               'spencer', xp=xp)
 
-    dni_extra = get_extra_radiation(doy)
-
-    kt = clearness_index(ghi, zenith, dni_extra, min_cos_zenith=min_cos_zenith,
-                         max_clearness_index=1)
+    kt = clearness_index.core(ghi, zenith, dni_extra,
+                              min_cos_zenith=min_cos_zenith,
+                              max_clearness_index=1, xp=xp)
 
     # For Kt <= 0.22, set the diffuse fraction
     df = 1 - 0.09*kt
@@ -2845,7 +2838,7 @@ def erbs(ghi, zenith, datetime_or_doy, min_cos_zenith=0.065, max_zenith=87):
 
     dhi = df * ghi
 
-    dni = (ghi - dhi) / tools.cosd(zenith)
+    dni = (ghi - dhi) / tools._cosd(zenith, xp)
     bad_values = (zenith > max_zenith) | (ghi < 0) | (dni < 0)
     dni = xp.where(bad_values, 0., dni)
     # ensure that closure relationship remains valid

@@ -256,6 +256,41 @@ def test_xarray_joins_like_xarray_arithmetic():
     assert list(out['t'].values) == list((zen + azi)['t'].values) == [1, 2]
 
 
+@pytest.mark.parametrize('kind', ['scalar', 'series', 'torch'])
+def test_nested_calls_find_the_namespace_once(monkeypatch, kind):
+    # get_total_irradiance calls get_sky_diffuse, haydavies, aoi_projection,
+    # get_ground_diffuse, aoi and poa_components through their cores, so the
+    # boundary's work is done once per call
+    from pvlib import _array_api
+    if kind == 'torch':
+        torch = _torch()
+
+        def a(v):
+            return torch.asarray(v, dtype=torch.float64)
+    elif kind == 'series':
+        def a(v):
+            return pd.Series([v, v])
+    else:
+        def a(v):
+            return v
+    calls = []
+    namespace = _array_api.array_namespace
+    monkeypatch.setattr(_array_api, 'array_namespace',
+                        lambda *xs: calls.append(xs) or namespace(*xs))
+    irradiance.get_total_irradiance(
+        a(30.), 180., a(20.), a(160.), a(800.), a(900.), a(100.),
+        dni_extra=1360., model='haydavies')
+    assert len(calls) == 1
+
+
+def test_public_signature_hides_xp():
+    import inspect
+    assert 'xp' not in inspect.signature(irradiance.aoi).parameters
+    assert 'xp' in inspect.signature(irradiance.aoi.core).parameters
+    with pytest.raises(TypeError, match='xp'):
+        irradiance.aoi(30., 180., 20., 160., xp=np)
+
+
 def test_spa_formula_numpy_names_have_array_api_equivalents():
     # spa formulas are written with np. for numba; every np name they use
     # must resolve on a strictly conforming namespace

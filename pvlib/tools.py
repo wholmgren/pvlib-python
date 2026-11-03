@@ -15,8 +15,8 @@ import zoneinfo
 from pvlib import _array_api as _xa
 
 
-# no labeled_io here: NumPy ufuncs already keep pandas and xarray types,
-# and the decorator would add overhead to every internal call
+# no labeled_io here: NumPy ufuncs already keep pandas and xarray types.
+# Cores call the private versions, which take the namespace
 def cosd(angle):
     """
     Trigonometric cosine with angle input in degrees.
@@ -31,9 +31,11 @@ def cosd(angle):
     result : float or array-like
         Cosine of the angle
     """
-    xp = _xa.array_namespace(angle)
-    res = xp.cos(_xa.deg2rad(angle))
-    return res
+    return _cosd(angle, _xa.array_namespace(angle))
+
+
+def _cosd(angle, xp):
+    return xp.cos(_xa.deg2rad(angle))
 
 
 def sind(angle):
@@ -50,9 +52,11 @@ def sind(angle):
     result : float
         Sin of the angle
     """
-    xp = _xa.array_namespace(angle)
-    res = xp.sin(_xa.deg2rad(angle))
-    return res
+    return _sind(angle, _xa.array_namespace(angle))
+
+
+def _sind(angle, xp):
+    return xp.sin(_xa.deg2rad(angle))
 
 
 def tand(angle):
@@ -69,9 +73,11 @@ def tand(angle):
     result : float
         Tan of the angle
     """
-    xp = _xa.array_namespace(angle)
-    res = xp.tan(_xa.deg2rad(angle))
-    return res
+    return _tand(angle, _xa.array_namespace(angle))
+
+
+def _tand(angle, xp):
+    return xp.tan(_xa.deg2rad(angle))
 
 
 def asind(number):
@@ -88,9 +94,11 @@ def asind(number):
     result : float
         arcsin result
     """
-    xp = _xa.array_namespace(number)
-    res = _xa.rad2deg(xp.asin(number))
-    return res
+    return _asind(number, _xa.array_namespace(number))
+
+
+def _asind(number, xp):
+    return _xa.rad2deg(xp.asin(number))
 
 
 def acosd(number):
@@ -107,9 +115,11 @@ def acosd(number):
     result : float
         arccos result
     """
-    xp = _xa.array_namespace(number)
-    res = _xa.rad2deg(xp.acos(number))
-    return res
+    return _acosd(number, _xa.array_namespace(number))
+
+
+def _acosd(number, xp):
+    return _xa.rad2deg(xp.acos(number))
 
 
 def atand(number):
@@ -126,9 +136,11 @@ def atand(number):
     result : float
         arctan result
     """
-    xp = _xa.array_namespace(number)
-    res = _xa.rad2deg(xp.atan(number))
-    return res
+    return _atand(number, _xa.array_namespace(number))
+
+
+def _atand(number, xp):
+    return _xa.rad2deg(xp.atan(number))
 
 
 def localize_to_utc(time, location):
@@ -239,8 +251,8 @@ def datetime_to_unix(time):
     return _xa._datetime_to_number(time, 'unix')
 
 
-@_xa.labeled_io(name=None)
-def unix_to_doy(t):
+@_xa.labeled_io(name=None, arrays=('t',))
+def unix_to_doy(t, *, xp):
     """
     Day of year, in UTC, of times in seconds since 1970-01-01 00:00 UTC.
 
@@ -268,8 +280,6 @@ def unix_to_doy(t):
     >>> unix_to_doy(datetime_to_unix(pd.Timestamp('2026-12-31 23:00')))
     np.float64(365.0)
     """
-    xp = _xa.array_namespace(t)
-    t, = _xa.asarrays(t, xp=xp)
     if t.dtype != xp.float64:
         raise TypeError(f't must be float64; got dtype {t.dtype}')
     return _xa.unix_to_civil(t, xp)[3]

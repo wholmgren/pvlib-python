@@ -2044,7 +2044,8 @@ def test_PVSystem_get_irradiance_albedo(solar_pos):
 
 def test_PVSystem_get_irradiance_model(mocker, solar_pos):
     spy_perez = mocker.spy(irradiance, 'perez')
-    spy_haydavies = mocker.spy(irradiance, 'haydavies')
+    # get_sky_diffuse calls the core of haydavies, see pvlib._array_api
+    spy_haydavies = mocker.spy(irradiance.haydavies, 'core')
     system = pvsystem.PVSystem(surface_tilt=32, surface_azimuth=135)
     irrads = pd.DataFrame({'dni': [900, 0], 'ghi': [600, 0], 'dhi': [100, 0]},
                           index=solar_pos.index)

@@ -369,15 +369,14 @@ def spa_python(time, latitude, longitude,
                        temperature, delta_t, atmos_refract, how, numthreads)
 
 
-@_xa.labeled_io(time={'time': 'unix'})
+@_xa.labeled_io(arrays=('time',), time={'time': 'unix'})
 def _spa_python(time, latitude, longitude, altitude, pressure, temperature,
-                delta_t, atmos_refract, how, numthreads):
+                delta_t, atmos_refract, how, numthreads, *, xp):
     # time is seconds since 1970-01-01 UTC, from labeled_io
     unixtime = time
-    xp = _xa.array_namespace(unixtime)
     # 2e11 s is the year 8300; nanoseconds (e.g. DatetimeIndex.asi8) are far
     # larger for any time after 1970-01-01 00:03:20
-    if _xa.known_any(xp.abs(_xa.asarrays(unixtime, xp=xp)[0]) > 2e11, xp):
+    if _xa.known_any(xp.abs(unixtime) > 2e11, xp):
         raise ValueError('numeric time must be seconds since 1970-01-01 UTC; '
                          'these look like milli-, micro- or nanoseconds')
     lat = latitude
@@ -390,8 +389,7 @@ def _spa_python(time, latitude, longitude, altitude, pressure, temperature,
     spa = _spa_python_import(how)
 
     if delta_t is None:
-        unixtime_, = _xa.asarrays(unixtime, xp=xp)
-        year, month, _, _ = _xa.unix_to_civil(unixtime_, xp)
+        year, month, _, _ = _xa.unix_to_civil(unixtime, xp)
         delta_t = spa.calculate_deltat(year, month)
 
     position = spa.solar_position(unixtime, lat, lon, elev, pressure,

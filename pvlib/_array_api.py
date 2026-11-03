@@ -5,10 +5,20 @@ standard, https://data-apis.org/array-api/latest/
 Model code is written once against an array namespace ``xp`` and then runs
 on any conforming array library (NumPy, CuPy, PyTorch, JAX, Dask, ...).
 
-pandas and xarray objects do not implement the standard. They are unwrapped
-at the function boundary by :py:func:`labeled_io` and the result is wrapped
-again, so pandas in, pandas out (and xarray in, xarray out) is unchanged for
-users.
+Cores and boundaries
+--------------------
+Each ported function is a core: it takes the namespace as ``xp`` and assumes
+its array arguments are already arrays of it, so it is only the model's
+math. :py:func:`labeled_io` makes the core into the public function, the
+boundary, which once per call unwraps pandas and xarray objects (they do not
+implement the standard), finds the namespace, converts the arguments, and
+wraps the result again. pandas in, pandas out (and xarray in, xarray out) is
+unchanged for users.
+
+pvlib functions call each other's cores, ``aoi_projection.core(..., xp=xp)``,
+so a call that goes through several functions crosses the boundary once.
+``tools._cosd`` and the other private trig helpers take ``xp`` for the same
+reason.
 
 Time
 ----
@@ -419,22 +429,66 @@ def _scalarize(out):
 _INFER = object()
 
 
-def labeled_io(name=_INFER, time=None, timedelta=(), index_time=None):
+def _convert_arrays(arguments, names):
     """
-    Decorate a function written against the array API so that it accepts and
-    returns labeled containers: pandas objects and xarray DataArrays.
+    Find the namespace of the ``names`` arguments, convert them in place with
+    :py:func:`asarrays`, and return the namespace. The values of a dict
+    argument are converted too.
+    """
+    values = [arguments.get(k) for k in names]
+    if not any(isinstance(v, dict) for v in values):  # the common case
+        xp = array_namespace(*values)
+        for k, x in zip(names, asarrays(*values, xp=xp)):
+            if k in arguments:
+                arguments[k] = x
+        return xp
+    keys, values = [], []
+    for k in names:
+        v = arguments.get(k)
+        if isinstance(v, dict):
+            keys += [(k, key) for key in v]
+            values += list(v.values())
+        else:
+            keys.append((k, None))
+            values.append(v)
+    xp = array_namespace(*values)
+    dicts = {}
+    for (k, key), x in zip(keys, asarrays(*values, xp=xp)):
+        if key is not None:
+            dicts.setdefault(k, {})[key] = x
+        elif k in arguments:
+            arguments[k] = x
+    arguments.update(dicts)
+    return xp
 
-    pandas Series and DataFrame arguments are converted to NumPy arrays (a
-    DataFrame becomes a dict of arrays) before the function is called. If any
-    were found, a 1-D array result becomes a Series and a dict result a
-    DataFrame, on the index of the first pandas argument.
 
-    xarray DataArray arguments are aligned and broadcast by dimension name
-    and replaced by their underlying arrays, which may be from any array
-    library. An array result becomes a DataArray and a dict result a Dataset.
+def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
+               index_time=None):
+    """
+    Make a function written against the array API (the core) into a pvlib
+    function (the boundary) that accepts and returns pandas objects, xarray
+    DataArrays, NumPy masked arrays, scalars and arrays of any library.
 
-    NumPy masked arrays are passed on with NaN at masked positions, and array
-    results are masked wherever any masked argument was.
+    The core takes the array namespace as a keyword-only argument ``xp``, and
+    gets the parameters named in ``arrays`` as arrays of that namespace, with
+    a common floating-point dtype and device. Once per call, the boundary
+
+    1. converts pandas Series to NumPy arrays and DataFrames to dicts of
+       them, datetimes to numbers (see ``time``), and masked arrays to arrays
+       with NaN at masked positions. xarray DataArrays are aligned and
+       broadcast by dimension name and replaced by their underlying arrays,
+       which may be from any array library;
+    2. finds the namespace of the ``arrays`` arguments and converts them with
+       :py:func:`asarrays`;
+    3. calls the core, and wraps its result: a 1-D array as a Series and a
+       dict as a DataFrame on the index of the first pandas argument, an
+       array as a DataArray and a dict as a Dataset, masked wherever any
+       masked argument was, or as a NumPy scalar if all arguments were
+       scalars.
+
+    pvlib functions call each other's cores, ``f.core(..., xp=xp)``, with
+    arguments that are already arrays of ``xp``, so this work isn't repeated.
+    The decorated function's signature leaves out ``xp``.
 
     Parameters
     ----------
@@ -443,6 +497,9 @@ def labeled_io(name=_INFER, time=None, timedelta=(), index_time=None):
         by all the labeled arguments, or None if they differ, as in pandas
         arithmetic. A callable gets the bound arguments and returns the name,
         or ``labeled_io.INFER`` for the default.
+    arrays : tuple of str
+        Parameters that are arrays, or None, or dicts of arrays. Other
+        parameters, such as model names and flags, reach the core unchanged.
     time : dict, optional
         Maps parameter names to the numeric time the function works with,
         ``'unix'`` or ``'doy'``. Datetime-like arguments are converted;
@@ -460,68 +517,95 @@ def labeled_io(name=_INFER, time=None, timedelta=(), index_time=None):
 
     def decorator(func):
         sig = inspect.signature(func)
-        simple = not (time or timedelta or index_time or callable(name))
+        xp_param = sig.parameters.get('xp')
+        params = [p for p in sig.parameters.values() if p.name != 'xp']
+        if (xp_param is None or xp_param.kind is not xp_param.KEYWORD_ONLY
+                or any(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+                       for p in params)):
+            raise TypeError(f'{func.__name__} must take a keyword-only xp, '
+                            'and no *args or **kwargs')
+        names = [p.name for p in params]
+        positional = [p.name for p in params
+                      if p.kind is p.POSITIONAL_OR_KEYWORD]
+        defaults = {p.name: p.default for p in params
+                    if p.default is not p.empty}
+
+        def bind(args, kwargs):
+            # like sig.bind and apply_defaults, but faster. A missing
+            # argument is left for the call to the core to report
+            if len(args) > len(positional):
+                raise TypeError(f'{func.__name__}() takes {len(positional)} '
+                                f'positional arguments but {len(args)} were '
+                                'given')
+            given = dict(zip(positional, args))
+            for k, v in kwargs.items():
+                if k in given:
+                    raise TypeError(f'{func.__name__}() got multiple values '
+                                    f'for argument {k!r}')
+                if k not in sig.parameters or k == 'xp':
+                    raise TypeError(f'{func.__name__}() got an unexpected '
+                                    f'keyword argument {k!r}')
+                given[k] = v
+            return given
+
+        def call_core(arguments):
+            xp = _convert_arrays(arguments, arrays)
+            return func(**arguments, xp=xp)
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            given = bind(args, kwargs)
+            arguments = {**defaults, **given}
+            # defaults are plain values, so only given arguments need
+            # unwrapping
+            keys = list(given)
+            out_name = name(arguments) if callable(name) else name
+            if index_time and arguments.get(index_time) is None:
+                _fill_index_time(arguments, index_time)
+                if index_time not in given:
+                    keys.append(index_time)
+            for k in timedelta:
+                if k in arguments:
+                    arguments[k] = _timedelta_to_seconds(arguments[k])
+            if any(_is_dataarray(arguments[k]) for k in keys):
+                import xarray as xr
+                # signature order sets the order of the result's dimensions
+                arguments = {k: arguments[k] for k in names if k in arguments}
+                for k, kind in time.items():
+                    v = arguments.get(k)
+                    if _is_dataarray(v) and _is_datetime_like(v):
+                        arguments[k] = xr.DataArray(
+                            _datetime_to_number(v.values, kind),
+                            dims=v.dims, coords=v.coords, name=v.name)
+                return _call_xarray(func, arguments,
+                                    lambda: call_core(arguments), out_name)
             found, masks = [], []
-            if simple:  # fast path: no binding to the signature needed
-                if (any(_is_dataarray(a) for a in args)
-                        or any(_is_dataarray(v) for v in kwargs.values())):
-                    bound = sig.bind(*args, **kwargs)
-                    return _call_xarray(
-                        func, bound.arguments,
-                        lambda: func(*bound.args, **bound.kwargs), name)
-                args = [_unwrap(a, found, masks) for a in args]
-                kwargs = {k: _unwrap(v, found, masks)
-                          for k, v in kwargs.items()}
-                out = func(*args, **kwargs)
-                values = list(args) + list(kwargs.values())
-                out_name = name
-            else:
-                bound = sig.bind(*args, **kwargs)
-                bound.apply_defaults()  # defaults may need converting too
-                arguments = bound.arguments
-                out_name = name(arguments) if callable(name) else name
-                if index_time and arguments.get(index_time) is None:
-                    _fill_index_time(arguments, index_time)
-                for k in timedelta:
-                    if k in arguments:
-                        arguments[k] = _timedelta_to_seconds(arguments[k])
-                if any(_is_dataarray(v) for v in arguments.values()):
-                    import xarray as xr
-                    for k, kind in time.items():
-                        v = arguments.get(k)
-                        if _is_dataarray(v) and _is_datetime_like(v):
-                            arguments[k] = xr.DataArray(
-                                _datetime_to_number(v.values, kind),
-                                dims=v.dims, coords=v.coords, name=v.name)
-                    return _call_xarray(
-                        func, arguments,
-                        lambda: func(*bound.args, **bound.kwargs), out_name)
-                for k, v in arguments.items():
-                    # convert time first: unwrapping a tz-aware Series of
-                    # datetimes would give an object array of Timestamps
-                    if k in time and _is_datetime_like(v):
-                        if isinstance(v, (pd.Series, pd.DatetimeIndex)):
-                            found.append(v)
-                        arguments[k] = _datetime_to_number(v, time[k])
-                    else:
-                        arguments[k] = _unwrap(v, found, masks)
-                out = func(*bound.args, **bound.kwargs)
-                values = list(arguments.values())
+            for k in keys:
+                v = arguments[k]
+                # convert time first: unwrapping a tz-aware Series of
+                # datetimes would give an object array of Timestamps
+                if k in time and _is_datetime_like(v):
+                    if isinstance(v, (pd.Series, pd.DatetimeIndex)):
+                        found.append(v)
+                    arguments[k] = _datetime_to_number(v, time[k])
+                else:
+                    arguments[k] = _unwrap(v, found, masks)
+            scalar = not found and not masks and _all_scalar(
+                [arguments[k] for k in keys])
+            out = call_core(arguments)
             if not found:
                 if masks:
                     return _wrap_masked(out, masks)
-                if _all_scalar(values):
-                    out = _scalarize(out)
-                return out
+                return _scalarize(out) if scalar else out
             if out_name is _INFER:
-                names = {x.name for x in found if isinstance(x, pd.Series)}
-                out_name = names.pop() if len(names) == 1 else None
+                names_ = {x.name for x in found if isinstance(x, pd.Series)}
+                out_name = names_.pop() if len(names_) == 1 else None
             index = found[0] if isinstance(found[0], pd.Index) \
                 else found[0].index
             return _wrap_pandas(out, index, out_name)
+
+        wrapper.__signature__ = sig.replace(parameters=params)
+        wrapper.core = func
         return wrapper
     return decorator
 

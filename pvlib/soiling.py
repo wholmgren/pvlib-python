@@ -6,16 +6,19 @@ import datetime
 import numpy as np
 import pandas as pd
 
-from pvlib.tools import cosd
+from pvlib.tools import _cosd
 from pvlib import _array_api as _xa
 
 _RAIN_TOLERANCE = 1e-9  # mm, see hsu
 
 
-@_xa.labeled_io(name=None, time={'times': 'unix'},
-                timedelta=('rain_accum_period',), index_time='times')
+@_xa.labeled_io(name=None,
+                arrays=('rainfall', 'times', 'surface_tilt', 'pm2_5', 'pm10'),
+                time={'times': 'unix'}, timedelta=('rain_accum_period',),
+                index_time='times')
 def hsu(rainfall, cleaning_threshold, surface_tilt, pm2_5, pm10,
-        depo_veloc=None, rain_accum_period=pd.Timedelta('1h'), times=None):
+        depo_veloc=None, rain_accum_period=pd.Timedelta('1h'), times=None, *,
+        xp):
     """
     Calculates soiling ratio given particulate and rain data using the
     Fixed Velocity model from Humboldt State University (HSU).
@@ -95,9 +98,6 @@ def hsu(rainfall, cleaning_threshold, surface_tilt, pm2_5, pm10,
 
     # times is seconds since 1970-01-01 UTC and rain_accum_period is
     # seconds, from labeled_io
-    xp = _xa.array_namespace(rainfall, times, surface_tilt, pm2_5, pm10)
-    rainfall, times, surface_tilt, pm2_5, pm10 = _xa.asarrays(
-        rainfall, times, surface_tilt, pm2_5, pm10, xp=xp)
 
     # pandas rolling raises for an unsorted index; the window sums below
     # would be silently wrong
@@ -122,7 +122,8 @@ def hsu(rainfall, cleaning_threshold, surface_tilt, pm2_5, pm10,
     horiz_mass_rate = (
         pm2_5 * depo_veloc['2_5'] + xp.maximum(pm10 - pm2_5, 0.)
         * depo_veloc['10']) * dt_sec
-    tilted_mass_rate = horiz_mass_rate * cosd(surface_tilt)  # assuming no rain
+    # assuming no rain
+    tilted_mass_rate = horiz_mass_rate * _cosd(surface_tilt, xp)
 
     # tms -> tilt_mass_rate
     mass_no_cleaning = xp.cumulative_sum(
