@@ -210,5 +210,6 @@ SciPy's `array API support
 Performance
 -----------
 
-Converting inputs and outputs costs a few microseconds per call. That only
-matters when calling a function on scalars in a loop: pass arrays instead.
+Converting inputs and outputs costs a few microseconds per call, and calls
+with only numbers take a shortcut that costs 1–3 µs. That only matters when
+calling a function on scalars in a loop: pass arrays instead.

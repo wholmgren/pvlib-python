@@ -316,7 +316,23 @@ def test_nested_calls_find_the_namespace_once(monkeypatch, kind):
     irradiance.get_total_irradiance(
         a(30.), 180., a(20.), a(160.), a(800.), a(900.), a(100.),
         dni_extra=1360., model='haydavies')
-    assert len(calls) == 1
+    # calls with only numbers take a fast path that needs no lookup
+    assert len(calls) == (0 if kind == 'scalar' else 1)
+
+
+def test_scalar_fast_path_matches_full_boundary():
+    # np.float32 isn't on the fast path, so the same values go through the
+    # full boundary
+    kwargs = dict(surface_tilt=30., surface_azimuth=180., solar_zenith=40.,
+                  solar_azimuth=150., dni=800., ghi=900., dhi=100.,
+                  dni_extra=1360., model='haydavies')
+    fast = irradiance.get_total_irradiance(**kwargs)
+    full = irradiance.get_total_irradiance(
+        **{**kwargs, 'surface_tilt': np.float32(30.)})
+    assert fast.keys() == full.keys()
+    for k in fast:
+        assert type(fast[k]) is np.float64
+        assert fast[k] == full[k]
 
 
 def test_public_signature_hides_xp():

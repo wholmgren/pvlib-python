@@ -271,12 +271,44 @@ Performance
 
 The boundary costs a few microseconds per call. On NumPy arrays of 8,760
 values that matters only for the cheapest functions, and pandas input is
-faster than before. Calls on scalars
-are slower: 28 µs for :py:func:`~pvlib.irradiance.get_total_irradiance`
-against 12 µs before this work. Code that calls a function on scalars in a
-loop should pass arrays instead. ``array_namespace`` has a fast path for
-NumPy and pandas inputs, and a fast path for scalars in the boundary is
-still to do.
+faster than before. ``array_namespace`` has a fast path for NumPy and pandas
+inputs.
+
+Calls with only numbers, which are common in pvlib use, take a fast path
+through the boundary: arguments that are all numbers, strings or None need
+no unwrapping, time conversion or namespace lookup. The core then gets NumPy
+float64 scalars rather than 0-d arrays, which NumPy handles faster. Without
+the fast path, :py:func:`~pvlib.irradiance.get_total_irradiance` took 28 µs
+with scalars, of which 11 µs was the boundary and 5 µs the 0-d arrays.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 20 20 20
+
+   * - Scalar call
+     - before this work
+     - full boundary
+     - fast path
+   * - :py:func:`~pvlib.irradiance.get_total_irradiance`
+     - 12 µs
+     - 28 µs
+     - 14 µs
+   * - :py:func:`~pvlib.irradiance.erbs`
+     - 7.1 µs
+     - 14 µs
+     - 7.5 µs
+   * - :py:func:`~pvlib.temperature.sapm_cell`
+     - 0.4 µs
+     - 9.6 µs
+     - 2.2 µs
+   * - :py:func:`~pvlib.temperature.faiman`
+     - 1.0 µs
+     - 6.5 µs
+     - 1.4 µs
+
+Functions that were a line of arithmetic, such as
+:py:func:`~pvlib.pvsystem.pvwatts_dc` at 0.1 µs, cost 1–2 µs more. Code
+that calls a function on scalars in a loop should pass arrays instead.
 
 
 Comparison with SciPy and scikit-learn
@@ -340,8 +372,6 @@ Open questions
   opt-in is open.
 - **Special functions.** Drop pvlib's own dispatch once SciPy's support no
   longer needs ``SCIPY_ARRAY_API``.
-- **Scalar overhead.** A fast path in the boundary for calls whose
-  arguments are all scalars.
 
 
 References

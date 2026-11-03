@@ -52,6 +52,8 @@ from array_api_compat import is_array_api_obj, is_lazy_array
 
 
 _SCALAR_TYPES = (bool, int, float, complex, np.generic)
+# the argument types of the boundary's fast path, by exact type
+_FAST_TYPES = frozenset({bool, int, float, np.float64, str, type(None)})
 _NUMPY_TYPES = _SCALAR_TYPES + (np.ndarray, list, tuple, pd.Series,
                                 pd.DataFrame)
 
@@ -580,6 +582,11 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
        wherever any masked argument was, or as a NumPy scalar if all
        arguments were scalars.
 
+    Calls whose arguments are all numbers, strings or None skip steps 1 and
+    2: the core gets the numbers as NumPy float64 scalars, which NumPy
+    handles faster than 0-d arrays, unless the function has ``timedelta``
+    or ``index_time`` parameters.
+
     pvlib functions call each other's cores, ``f.core(..., xp=xp)``, with
     arguments that are already arrays of ``xp``, so this work isn't repeated.
     The decorated function's signature leaves out ``xp``.
@@ -648,10 +655,23 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
             xp = _convert_arrays(arguments, arrays)
             return func(**arguments, xp=xp)
 
+        # functions with Timedelta defaults or time from an index need the
+        # full boundary even for scalars
+        fast = not (timedelta or index_time)
+
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             given = bind(args, kwargs)
             arguments = {**defaults, **given}
+            if fast and all(type(v) in _FAST_TYPES for v in given.values()):
+                # numbers, strings and None need no unwrapping, time
+                # conversion or namespace lookup. NumPy scalars are float64
+                # 0-d arrays, as asarrays would make them, but faster
+                for k in arrays:
+                    v = arguments.get(k)
+                    if v is not None:
+                        arguments[k] = np.float64(v)
+                return _scalarize(func(**arguments, xp=np_compat))
             # defaults are plain values, so only given arguments need
             # unwrapping
             keys = list(given)

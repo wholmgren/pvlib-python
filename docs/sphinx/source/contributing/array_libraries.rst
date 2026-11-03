@@ -112,6 +112,12 @@ boundary makes a dict into a DataFrame for pandas input and a Dataset for
 xarray input; describe it in the docstring as, for example, "dict or
 DataFrame".
 
+For calls with only numbers, strings and None, the core gets NumPy float64
+scalars instead of 0-d arrays, which is faster
+(:ref:`why <array-design-performance>`). The core must work with both, which
+it does if it follows the rules below. ``test_input_types.py`` runs scalars
+through this path and the other input types through the full boundary.
+
 
 .. _array-libraries-core:
 
