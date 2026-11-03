@@ -159,15 +159,22 @@ pandas arithmetic, a mismatch gave NaN; now values are matched by position.
 Why xarray gets size-1 dimensions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The boundary aligns DataArray arguments as xarray arithmetic does, and gives
-each one the union of the dimensions, with size 1 where it has none. The
-core's ordinary broadcasting does the rest, so a term that depends only on
-time is calculated once per time, not once per grid cell. For 8,760 hours on
-a 40 × 40 grid, :py:func:`~pvlib.solarposition.spa_python` takes 1.25 s,
-against 30.1 s with fully broadcast inputs.
+The boundary calls the core through `xarray.apply_ufunc
+<https://docs.xarray.dev/en/stable/generated/xarray.apply_ufunc.html>`_,
+which aligns the DataArray arguments as xarray arithmetic does, and gives
+each one the dimensions of all of them, with size 1 where it has none,
+instead of broadcasting them. The core's ordinary broadcasting does the
+rest, so a term that depends only on time is calculated once per time, not
+once per grid cell. For 8,760 hours on a 40 × 40 grid,
+:py:func:`~pvlib.solarposition.spa_python` takes 1.0 s, against 28 s with
+fully broadcast inputs.
 
-Unlabeled arrays broadcast by position, as in xarray arithmetic, and raise
-if they would add a dimension, since the result could then not be labeled.
+``apply_ufunc`` is xarray's own tool for applying a function to the arrays
+inside DataArrays, so alignment, coordinates and Dask follow xarray's rules.
+pvlib adds two things: every output of a core that returns several is
+labeled, and unlabeled arrays, which broadcast by position as in xarray
+arithmetic, raise if they would add a dimension, since the result could
+then not be labeled.
 
 DataArrays can hold Dask arrays and other arrays that aren't NumPy (see
 xarray's `duck array
@@ -316,9 +323,6 @@ adopters, and both are still experimental.
 Open questions
 ~~~~~~~~~~~~~~
 
-- **xarray.** ``xarray.apply_ufunc`` also gives arguments size-1 dimensions,
-  and handles Dask through ``dask='allowed'``. It could replace pvlib's own
-  xarray code if each function declared the names of its outputs.
 - **Documenting support.** A decorator like SciPy's ``xp_capabilities``
   could build the list of supported functions and libraries, and the test
   marks, from one place.

@@ -378,27 +378,68 @@ def _wrap_pandas(out, index, name):
     return out
 
 
-def _call_xarray(func, arguments, call, name):
+def _call_xarray(arguments, call, name):
     """
-    Align DataArray arguments, give each one the union of all dimensions
-    (size 1 where it has none), call ``func`` on the underlying arrays and
-    relabel the result.
+    Call ``call`` on the underlying arrays of the DataArray ``arguments``
+    with :py:func:`xarray.apply_ufunc`, and label the result.
 
-    Size-1 dimensions let NumPy-style broadcasting do the rest, so a term
-    that depends only on time is computed once per time, not once per grid
-    cell.
+    ``apply_ufunc`` aligns the DataArrays as xarray arithmetic does, and
+    gives each one the dimensions of all of them, with size 1 where it has
+    none, instead of broadcasting them. So a term that depends only on time
+    is computed once per time, not once per grid cell. Dask arrays pass
+    through unchanged.
     """
     import xarray as xr
 
     keys = [k for k, v in arguments.items() if _is_dataarray(v)]
-    # join as xarray arithmetic does (inner by default)
-    aligned = xr.align(*(arguments[k] for k in keys),
-                       join=xr.get_options()['arithmetic_join'])
-    dims, sizes = [], {}
-    for da in aligned:
-        dims += [d for d in da.dims if d not in dims]
-        sizes.update(da.sizes)
-    full = tuple(sizes[d] for d in dims)
+    dims = []
+    for k in keys:
+        dims += [d for d in arguments[k].dims if d not in dims]
+    called = {}
+
+    def call_on_data(*data):
+        # apply_ufunc leaves out leading size-1 dimensions, so the arrays
+        # broadcast to the shape of all the dimensions
+        full = np.broadcast_shapes(*(tuple(x.shape) for x in data))
+        _check_unlabeled(arguments, keys, full, dims)
+        arguments.update(zip(keys, data))
+        out = call()
+        if isinstance(out, dict):
+            outputs = list(out.values())
+        elif isinstance(out, tuple):
+            outputs = list(out)
+        else:
+            outputs = [out]
+        # apply_ufunc labels one output; the others get its labels below
+        outputs = [array_namespace(o).broadcast_to(o, full)
+                   for o in outputs]
+        called.update(out=out, outputs=outputs)
+        return outputs[0]
+
+    # join as xarray arithmetic does (inner by default). The results are
+    # other quantities, so the inputs' attributes (units, ...) are dropped
+    first = xr.apply_ufunc(
+        call_on_data, *(arguments[k] for k in keys), dask='allowed',
+        join=xr.get_options()['arithmetic_join'], keep_attrs=False)
+    out = called['out']
+    labeled = [first] + [first.copy(data=o) for o in called['outputs'][1:]]
+    if isinstance(out, dict):
+        names = list(out)
+    elif isinstance(out, tuple):
+        names = [None] * len(out)
+    else:
+        # apply_ufunc names the result as xarray arithmetic does
+        names = [first.name if name is _INFER else name]
+    for da, n in zip(labeled, names):
+        da.name = n
+    if isinstance(out, dict):
+        return xr.Dataset(dict(zip(names, labeled)))
+    if isinstance(out, tuple):
+        return tuple(labeled)
+    return first
+
+
+def _check_unlabeled(arguments, keys, full, dims):
     # unlabeled arrays broadcast by position, as in xarray arithmetic, and
     # may not add dimensions, which would leave the result unlabeled
     for k, v in arguments.items():
@@ -415,29 +456,6 @@ def _call_xarray(func, arguments, call, name):
                 f'{full}, the shape of dimensions {tuple(dims)} of the '
                 'DataArray arguments. Pass a DataArray to broadcast by '
                 'dimension name.')
-    # private names: a parameter may share its name with a coordinate
-    coords = xr.Dataset({f'_{i}': da for i, da in enumerate(aligned)}).coords
-    for k, da in zip(keys, aligned):
-        data = da.transpose(*[d for d in dims if d in da.dims]).data
-        shape = tuple(sizes[d] if d in da.dims else 1 for d in dims)
-        arguments[k] = array_namespace(data).reshape(data, shape)
-    out = call()
-
-    if name is _INFER:
-        names = {da.name for da in aligned}
-        name = names.pop() if len(names) == 1 else None
-
-    def relabel(o, name):
-        if is_array_api_obj(o) and getattr(o, 'ndim', 0) == len(dims):
-            o = array_namespace(o).broadcast_to(o, full)
-            return xr.DataArray(o, coords=coords, dims=dims, name=name)
-        return o
-
-    if isinstance(out, dict):
-        return xr.Dataset({k: relabel(v, k) for k, v in out.items()})
-    if isinstance(out, tuple):
-        return tuple(relabel(o, None) for o in out)
-    return relabel(out, name)
 
 
 def _all_scalar(args):
@@ -507,8 +525,9 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
        them, datetimes to numbers (see ``time``) in the library and on the
        device of the other array arguments, and masked arrays to arrays
        with NaN at masked positions. xarray DataArrays are aligned and
-       broadcast by dimension name and replaced by their underlying arrays,
-       which may be from any array library;
+       broadcast by dimension name with :py:func:`xarray.apply_ufunc` and
+       replaced by their underlying arrays, which may be from any array
+       library;
     2. finds the namespace of the ``arrays`` arguments and converts them with
        :py:func:`asarrays`;
     3. calls the core, and wraps its result: a 1-D NumPy array as a Series
@@ -612,7 +631,7 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
                             _datetime_to_number(v.values, kind),
                             dims=v.dims, coords=v.coords, name=v.name)
                         times.append(k)
-                return _call_xarray(func, arguments,
+                return _call_xarray(arguments,
                                     lambda: call_core(arguments, times),
                                     out_name)
             found, masks, times = [], [], []
