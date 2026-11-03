@@ -79,29 +79,49 @@ def array_namespace(*xs):
     return array_api_compat.array_namespace(*arrays)
 
 
-def asarrays(*xs, xp):
+def asarrays(*xs, xp, unix=()):
     """
     Convert ``xs`` to floating-point arrays with a common dtype and device.
 
-    The dtype is the promoted dtype of the floating-point array inputs, or
-    float64 if there are none. The device is that of the arrays, see
+    The dtype is the one NumPy arithmetic on the floating-point inputs gives
+    (arrays and NumPy scalars; Python floats don't change it), or float64 if
+    there are none. The device is that of the arrays, see
     :py:func:`common_device`. Masked values of NumPy masked arrays become
     NaN, so their fill values never enter a calculation
     (:py:func:`labeled_io` restores the mask). ``None`` passes through.
+
+    The positions in ``unix`` hold Unix seconds. They become float64 and
+    don't take part in choosing the others' dtype, since float32 resolves
+    them only to 128 s; floating-point ones that aren't float64 raise
+    ``TypeError``. Datetimes and strings raise ``TypeError`` everywhere.
     """
+    for i in unix:
+        _check_unix(xs[i], xp)
     if xp is np_compat:
-        floats = [x.dtype for x in xs
-                  if isinstance(x, np.ndarray) and x.dtype.kind == 'f']
+        floats = [x for i, x in enumerate(xs) if i not in unix
+                  and isinstance(x, (np.ndarray, np.generic))
+                  and x.dtype.kind == 'f']
         dtype = np.result_type(*floats) if floats else np.float64
-        return tuple(None if x is None else _np_asarray(x, dtype)
-                     for x in xs)
-    arrays = [x for x in xs if is_array_api_obj(x)
+        return tuple(None if x is None else
+                     _np_asarray(x, np.float64 if i in unix else dtype)
+                     for i, x in enumerate(xs))
+    arrays = [(i, x) for i, x in enumerate(xs) if is_array_api_obj(x)
               and not isinstance(x, np.generic)]
-    floats = [x for x in arrays if xp.isdtype(x.dtype, 'real floating')]
+    floats = [x for i, x in arrays
+              if i not in unix and xp.isdtype(x.dtype, 'real floating')]
     dtype = xp.result_type(*floats) if floats else xp.float64
-    device = common_device(arrays)
+    device = common_device([x for _, x in arrays])
     return tuple(None if x is None else
-                 xp.asarray(x, dtype=dtype, device=device) for x in xs)
+                 xp.asarray(x, dtype=xp.float64 if i in unix else dtype,
+                            device=device)
+                 for i, x in enumerate(xs))
+
+
+def _check_unix(x, xp):
+    if (is_array_api_obj(x) and xp.isdtype(x.dtype, 'real floating')
+            and x.dtype != xp.float64):
+        raise TypeError(f'Unix seconds must be float64, not {x.dtype}: '
+                        'float32 resolves them only to 128 s')
 
 
 def common_device(arrays):
@@ -132,8 +152,27 @@ def common_device(arrays):
 
 def _np_asarray(x, dtype):
     if isinstance(x, np.ma.MaskedArray):
-        return np.ma.filled(x.astype(dtype), np.nan)
-    return np.asarray(x, dtype=dtype)
+        return _filled(x, dtype)
+    if isinstance(x, str):
+        raise TypeError(f'expected numbers, got the string {x!r}')
+    # NumPy would read datetimes as nanoseconds and numeric strings as
+    # numbers
+    x = np.asarray(x)
+    if x.dtype.kind in 'mM':
+        raise TypeError(f'expected numbers, got {x.dtype} values. Times '
+                        'since 1970 are pvlib.tools.datetime_to_unix(times)')
+    if x.dtype.kind in 'SU':
+        raise TypeError(f'expected numbers, got strings ({x.dtype})')
+    return x.astype(dtype, copy=False)
+
+
+def _filled(x, dtype=None):
+    """The masked array ``x`` as an ndarray of ``dtype``, NaN where it is
+    masked. The dtype defaults to that of ``x`` if it is floating point,
+    else float64."""
+    if dtype is None:
+        dtype = x.dtype if x.dtype.kind == 'f' else np.float64
+    return np.ma.filled(x.astype(dtype), np.nan)
 
 
 def is_concrete(x):
@@ -223,6 +262,16 @@ def _datetime_to_number(x, kind):
     if shape is None:
         return out
     return out.reshape(shape)[()] if shape == () else out.reshape(shape)
+
+
+def _time_to_number(x, kind):
+    """:py:func:`_datetime_to_number`, for DataArrays too, keeping their
+    labels."""
+    if _is_dataarray(x):
+        import xarray as xr
+        return xr.DataArray(_datetime_to_number(x.values, kind), dims=x.dims,
+                            coords=x.coords, name=x.name)
+    return _datetime_to_number(x, kind)
 
 
 def _timedelta_to_seconds(x):
@@ -375,20 +424,46 @@ def erf(x, xp):
 
 # --- labeled containers -----------------------------------------------------
 
-def _unwrap(x, found, masks):
+def _unwrap(x, masks):
     if isinstance(x, pd.Series):
-        found.append(x)
         return x.to_numpy()
     if isinstance(x, pd.DataFrame):
-        found.append(x)
         return {k: v.to_numpy() for k, v in x.items()}
-    if isinstance(x, pd.DatetimeIndex):
-        found.append(x)
     if isinstance(x, np.ma.MaskedArray):
         masks.append(np.ma.getmaskarray(x))
-        return np.ma.filled(x.astype(np.result_type(x.dtype, np.float64)),
-                            np.nan)
+        return _filled(x)
     return x
+
+
+def _common_index(found):
+    """
+    The index of the pandas objects ``found``, (name, object) pairs.
+
+    They are unwrapped to arrays, which are matched by position, so their
+    indexes must be equal: pvlib doesn't align them as pandas arithmetic
+    does, which would also make NaN where they differ.
+    """
+    (first, x), *others = found
+    index = _index_of(x)
+    for name, x in others:
+        other = _index_of(x)
+        if other is not index and not other.equals(index):
+            raise ValueError(
+                f'{first} and {name} have different indexes. pvlib does not '
+                'align pandas inputs; make their indexes equal first, for '
+                'example with reindex')
+    return index
+
+
+def _index_of(x):
+    return x if isinstance(x, pd.Index) else x.index
+
+
+def _broadcasts_to(shape, target):
+    try:
+        return np.broadcast_shapes(shape, target) == target
+    except ValueError:
+        return False
 
 
 def _wrap_masked(out, masks):
@@ -401,7 +476,10 @@ def _wrap_masked(out, masks):
         shape = np.shape(out)
         mask = np.zeros(shape, dtype=bool)
         for m in masks:
-            mask = mask | np.broadcast_to(m, shape)
+            # an output that doesn't depend on a masked input may have
+            # fewer dimensions than it, poa_ground_diffuse for example
+            if _broadcasts_to(m.shape, shape):
+                mask = mask | np.broadcast_to(m, shape)
         return np.ma.masked_array(out, mask=mask)
     return out
 
@@ -456,8 +534,10 @@ def _call_xarray(arguments, call, name):
             outputs = list(out)
         else:
             outputs = [out]
-        # apply_ufunc labels one output; the others get its labels below
-        outputs = [array_namespace(o).broadcast_to(o, full)
+        # apply_ufunc labels one output; the others get its labels below.
+        # Outputs with fewer dimensions are broadcast and copied, since
+        # broadcast arrays are read-only views
+        outputs = [o if tuple(o.shape) == full else _broadcast_copy(o, full)
                    for o in outputs]
         called.update(out=out, outputs=outputs)
         return outputs[0]
@@ -485,6 +565,11 @@ def _call_xarray(arguments, call, name):
     return first
 
 
+def _broadcast_copy(x, shape):
+    xp = array_namespace(x)
+    return xp.asarray(xp.broadcast_to(x, shape), copy=True)
+
+
 def _check_unlabeled(arguments, keys, full, dims):
     # unlabeled arrays broadcast by position, as in xarray arithmetic, and
     # may not add dimensions, which would leave the result unlabeled
@@ -492,11 +577,7 @@ def _check_unlabeled(arguments, keys, full, dims):
         if k in keys or not (is_array_api_obj(v) or isinstance(v, list)):
             continue
         shape = tuple(np.shape(v) if isinstance(v, list) else v.shape)
-        try:
-            ok = np.broadcast_shapes(shape, full) == full
-        except ValueError:
-            ok = False
-        if not ok:
+        if not _broadcasts_to(shape, full):
             raise ValueError(
                 f'{k} has shape {shape}, which does not broadcast to '
                 f'{full}, the shape of dimensions {tuple(dims)} of the '
@@ -523,16 +604,18 @@ def _scalarize(out):
 _INFER = object()
 
 
-def _convert_arrays(arguments, names):
+def _convert_arrays(arguments, names, unix=()):
     """
     Find the namespace of the ``names`` arguments, convert them in place with
     :py:func:`asarrays`, and return the namespace. The values of a dict
-    argument are converted too.
+    argument are converted too. ``unix`` names the arguments in Unix
+    seconds.
     """
     values = [arguments.get(k) for k in names]
     if not any(isinstance(v, dict) for v in values):  # the common case
         xp = array_namespace(*values)
-        for k, x in zip(names, asarrays(*values, xp=xp)):
+        positions = [i for i, k in enumerate(names) if k in unix]
+        for k, x in zip(names, asarrays(*values, xp=xp, unix=positions)):
             if k in arguments:
                 arguments[k] = x
         return xp
@@ -546,8 +629,10 @@ def _convert_arrays(arguments, names):
             keys.append((k, None))
             values.append(v)
     xp = array_namespace(*values)
+    positions = [i for i, (k, key) in enumerate(keys)
+                 if key is None and k in unix]
     dicts = {}
-    for (k, key), x in zip(keys, asarrays(*values, xp=xp)):
+    for (k, key), x in zip(keys, asarrays(*values, xp=xp, unix=positions)):
         if key is not None:
             dicts.setdefault(k, {})[key] = x
         elif k in arguments:
@@ -567,13 +652,14 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
     gets the parameters named in ``arrays`` as arrays of that namespace, with
     a common floating-point dtype and device. Once per call, the boundary
 
-    1. converts pandas Series to NumPy arrays and DataFrames to dicts of
-       them, datetimes to numbers (see ``time``) in the library and on the
-       device of the other array arguments, and masked arrays to arrays
-       with NaN at masked positions. xarray DataArrays are aligned and
-       broadcast by dimension name with :py:func:`xarray.apply_ufunc` and
-       replaced by their underlying arrays, which may be from any array
-       library;
+    1. converts datetimes to numbers (see ``time``) in the library and on
+       the device of the other array arguments, pandas Series to NumPy
+       arrays and DataFrames to dicts of them, and masked arrays to arrays
+       with NaN at masked positions. pandas arguments must have equal
+       indexes, since the arrays are matched by position; ``ValueError``
+       otherwise. xarray DataArrays are aligned and broadcast by dimension
+       name with :py:func:`xarray.apply_ufunc` and replaced by their
+       underlying arrays, which may be from any array library;
     2. finds the namespace of the ``arrays`` arguments and converts them with
        :py:func:`asarrays`;
     3. calls the core, and wraps its result: a 1-D NumPy array as a Series
@@ -599,12 +685,14 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
         arithmetic. A callable gets the bound arguments and returns the name,
         or ``labeled_io.INFER`` for the default.
     arrays : tuple of str
-        Parameters that are arrays, or None, or dicts of arrays. Other
-        parameters, such as model names and flags, reach the core unchanged.
+        Parameters that are arrays, or None, or dicts of arrays. Datetimes and
+        strings given for them raise ``TypeError``. Other parameters, such as
+        model names and flags, reach the core unchanged.
     time : dict, optional
         Maps parameter names to the numeric time the function works with,
         ``'unix'`` or ``'doy'``. Datetime-like arguments are converted;
-        numeric ones pass through unchanged. A DatetimeIndex argument also
+        numeric ones pass through unchanged. ``'unix'`` arguments are always
+        float64, see :py:func:`asarrays`. A DatetimeIndex argument also
         indexes a pandas result.
     timedelta : tuple of str, optional
         Parameters converted from Timedelta-like to float seconds.
@@ -649,10 +737,12 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
                 given[k] = v
             return given
 
+        unix = [k for k, kind in time.items() if kind == 'unix']
+
         def call_core(arguments, times):
             if times:
                 _times_follow_data(arguments, times)
-            xp = _convert_arrays(arguments, arrays)
+            xp = _convert_arrays(arguments, arrays, unix)
             return func(**arguments, xp=xp)
 
         # functions with Timedelta defaults or time from an index need the
@@ -669,6 +759,9 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
                 # 0-d arrays, as asarrays would make them, but faster
                 for k in arrays:
                     v = arguments.get(k)
+                    if type(v) is str:  # np.float64 would read '30' as 30.
+                        raise TypeError(f'expected numbers for {k}, got the '
+                                        f'string {v!r}')
                     if v is not None:
                         arguments[k] = np.float64(v)
                 return _scalarize(func(**arguments, xp=np_compat))
@@ -683,33 +776,29 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
             for k in timedelta:
                 if k in arguments:
                     arguments[k] = _timedelta_to_seconds(arguments[k])
+            times = [k for k in keys
+                     if k in time and _is_datetime_like(arguments[k])]
             if any(_is_dataarray(arguments[k]) for k in keys):
-                import xarray as xr
+                # times that aren't DataArrays become unlabeled arrays,
+                # which broadcast by position
+                for k in times:
+                    arguments[k] = _time_to_number(arguments[k], time[k])
                 # signature order sets the order of the result's dimensions
                 arguments = {k: arguments[k] for k in names if k in arguments}
-                times = []
-                for k, kind in time.items():
-                    v = arguments.get(k)
-                    if _is_dataarray(v) and _is_datetime_like(v):
-                        arguments[k] = xr.DataArray(
-                            _datetime_to_number(v.values, kind),
-                            dims=v.dims, coords=v.coords, name=v.name)
-                        times.append(k)
                 return _call_xarray(arguments,
                                     lambda: call_core(arguments, times),
                                     out_name)
-            found, masks, times = [], [], []
+            found, masks = [], []
             for k in keys:
                 v = arguments[k]
+                if isinstance(v, (pd.Series, pd.DataFrame, pd.DatetimeIndex)):
+                    found.append((k, v))
                 # convert time first: unwrapping a tz-aware Series of
                 # datetimes would give an object array of Timestamps
-                if k in time and _is_datetime_like(v):
-                    if isinstance(v, (pd.Series, pd.DatetimeIndex)):
-                        found.append(v)
-                    arguments[k] = _datetime_to_number(v, time[k])
-                    times.append(k)
-                else:
-                    arguments[k] = _unwrap(v, found, masks)
+                arguments[k] = (_time_to_number(v, time[k]) if k in times
+                                else _unwrap(v, masks))
+            if found:
+                index = _common_index(found)
             scalar = not found and not masks and _all_scalar(
                 [arguments[k] for k in keys])
             out = call_core(arguments, times)
@@ -718,10 +807,8 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
                     return _wrap_masked(out, masks)
                 return _scalarize(out) if scalar else out
             if out_name is _INFER:
-                names_ = {x.name for x in found if isinstance(x, pd.Series)}
+                names_ = {x.name for _, x in found if isinstance(x, pd.Series)}
                 out_name = names_.pop() if len(names_) == 1 else None
-            index = found[0] if isinstance(found[0], pd.Index) \
-                else found[0].index
             return _wrap_pandas(out, index, out_name)
 
         wrapper.__signature__ = sig.replace(parameters=params)

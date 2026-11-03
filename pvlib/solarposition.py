@@ -290,8 +290,9 @@ def spa_python(time, latitude, longitude,
     Parameters
     ----------
     time : pandas.DatetimeIndex, datetime-like, or numeric array
-        Must be localized or UTC will be assumed. A numeric array, from any
-        array API library, is float64 seconds since 1970-01-01 00:00 UTC.
+        Must be localized or UTC will be assumed. Numbers, as a scalar, list,
+        Series or array of any array API library, are seconds since
+        1970-01-01 00:00 UTC, integer or float64.
     latitude : numeric
         Latitude in decimal degrees. Positive north of equator, negative
         to south.
@@ -353,13 +354,13 @@ def spa_python(time, latitude, longitude,
 
     # Added by Tony Lorenzo (@alorenzo175), University of Arizona, 2015
 
-    # keep accepting lists and scalars of datetimes. Numbers, scalar or
-    # array, are unix seconds and xarray time is converted by labeled_io
-    numeric = (isinstance(time, (int, float, np.integer, np.floating))
-               and not isinstance(time, bool))
-    if not (isinstance(time, pd.DatetimeIndex) or _xa._is_dataarray(time)
-            or numeric or (_xa.is_array_api_obj(time)
-                           and not _xa._is_datetime_like(time))):
+    # numbers, however given, are unix seconds. Other time becomes a
+    # DatetimeIndex, which indexes the result, as before, except xarray
+    # time, which labeled_io converts
+    if _is_unix_seconds(time):
+        if isinstance(time, (list, tuple)):
+            time = np.asarray(time)
+    elif not (isinstance(time, pd.DatetimeIndex) or _xa._is_dataarray(time)):
         try:
             time = pd.DatetimeIndex(time)
         except (TypeError, ValueError):
@@ -367,6 +368,19 @@ def spa_python(time, latitude, longitude,
 
     return _spa_python(time, latitude, longitude, altitude, pressure,
                        temperature, delta_t, atmos_refract, how, numthreads)
+
+
+def _is_unix_seconds(time):
+    # numbers: a scalar, or a list, Series or array of any library, but not
+    # bools
+    if isinstance(time, (list, tuple)):
+        time = np.asarray(time)
+    if isinstance(time, (np.ndarray, np.generic, pd.Series)):
+        return time.dtype.kind in 'iuf'
+    if isinstance(time, (int, float)):
+        return not isinstance(time, bool)
+    # arrays of other libraries have no datetime dtype
+    return _xa.is_array_api_obj(time)
 
 
 @_xa.labeled_io(arrays=('time',), time={'time': 'unix'})

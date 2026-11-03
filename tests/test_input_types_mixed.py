@@ -145,6 +145,14 @@ def _reference_argument(kind, values, category):
     return values
 
 
+def _mismatched(name, kinds):
+    # spa_python indexes its result by datetime64 time, naive UTC here,
+    # which isn't the tz-aware index of the Series: pandas inputs with
+    # different indexes raise
+    return bool(FUNCTIONS[name][3] & set(kinds) and PANDAS & set(kinds)
+                and not XARRAY & set(kinds))
+
+
 def _expected_container(name, kinds):
     if XARRAY & set(kinds):
         return 'xarray'
@@ -204,6 +212,10 @@ def test_mixed_input_types(name, kinds):
     func, params, other, _ = FUNCTIONS[name]
     arguments = {p: _argument(p, kinds[p], values, category)
                  for p, (values, category) in params.items()}
+    if _mismatched(name, kinds.values()):
+        with pytest.raises(ValueError, match='different indexes'):
+            func(**arguments, **other)
+        return
     reference = func(**{p: _reference_argument(kinds[p], values, category)
                         for p, (values, category) in params.items()},
                      **other)

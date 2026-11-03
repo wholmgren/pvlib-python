@@ -220,9 +220,9 @@ forward fill of values at flagged steps    ``_xa.take_last(values, flags, xp)``
 =========================================  ==========================================
 
 Unix seconds must be float64, since float32 resolves them only to 128
-seconds. A core that needs them should raise ``TypeError`` for any other
-dtype, as :py:func:`~pvlib.solarposition.spa_python` does. (:ref:`why
-<array-design-time>`)
+seconds. Declare them with ``time={'x': 'unix'}``: the boundary then
+converts them to float64 apart from the other arrays and raises
+``TypeError`` for float32. (:ref:`why <array-design-time>`)
 
 
 .. _array-libraries-testing:

@@ -321,14 +321,14 @@ def test_nested_calls_find_the_namespace_once(monkeypatch, kind):
 
 
 def test_scalar_fast_path_matches_full_boundary():
-    # np.float32 isn't on the fast path, so the same values go through the
-    # full boundary
+    # np.int64 isn't on the fast path, so the same values go through the
+    # full boundary, in float64 since no input is floating point but float64
     kwargs = dict(surface_tilt=30., surface_azimuth=180., solar_zenith=40.,
                   solar_azimuth=150., dni=800., ghi=900., dhi=100.,
                   dni_extra=1360., model='haydavies')
     fast = irradiance.get_total_irradiance(**kwargs)
     full = irradiance.get_total_irradiance(
-        **{**kwargs, 'surface_tilt': np.float32(30.)})
+        **{**kwargs, 'surface_tilt': np.int64(30)})
     assert fast.keys() == full.keys()
     for k in fast:
         assert type(fast[k]) is np.float64

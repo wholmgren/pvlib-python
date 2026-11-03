@@ -76,6 +76,11 @@ such as a tilt given as ``torch.tensor(30.)``, which move to the device of
 the others. Dask arrays stay lazy: the result is computed when you call
 ``.compute()``.
 
+pandas inputs must have equal indexes. pvlib matches their values by
+position and doesn't align them as pandas arithmetic does, so Series with
+different indexes raise ``ValueError``; reindex data with gaps first.
+Strings and datetimes given where numbers are expected raise ``TypeError``.
+
 xarray
 ------
 
@@ -130,9 +135,11 @@ not a pandas type. To convert once for many calls, use
 seconds with :py:func:`pvlib.tools.unix_to_doy`, which works on any array
 library and inside ``jax.jit``.
 
-Unix seconds must be float64: in float32 they resolve only 128 seconds, and
-:py:func:`~pvlib.solarposition.spa_python` raises ``TypeError``. PyTorch and
-JAX create float32 arrays by default. In JAX, enable float64 first with
+Unix seconds must be float64: in float32 they resolve only 128 seconds, so
+:py:func:`~pvlib.solarposition.spa_python` and :py:func:`~pvlib.soiling.hsu`
+raise ``TypeError`` for float32 seconds. Integer seconds are converted to
+float64, also with float32 data. PyTorch and JAX create float32 arrays by
+default. In JAX, enable float64 first with
 ``jax.config.update('jax_enable_x64', True)``. GPUs without float64, such as
 Apple's, can't calculate solar position.
 

@@ -109,8 +109,10 @@ which parameters are data.
 Why inputs are converted the way they are
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**One floating point dtype.** Arrays reach the core with the promoted
-floating point dtype of the inputs, or float64 if none is floating point.
+**One floating point dtype.** Arrays reach the core with the dtype NumPy
+arithmetic gives the floating point inputs, arrays and NumPy scalars (Python
+floats don't change it), or float64 if none is floating point. Unix seconds
+are the exception: they stay float64, see :ref:`array-design-time`.
 The standard leaves promotion between integer and floating point arrays
 unspecified (`type promotion
 <https://data-apis.org/array-api/latest/API_specification/type_promotion.html>`_),
@@ -153,8 +155,13 @@ on the index of the first pandas argument. Skipping pandas' work on every
 operation also made Series input faster: 375 µs instead of 1,390 µs for
 :py:func:`~pvlib.irradiance.get_total_irradiance` on 8,760 values.
 
-The cost is that Series with different indexes are no longer aligned. With
-pandas arithmetic, a mismatch gave NaN; now values are matched by position.
+The cost is that Series with different indexes can't be aligned. With pandas
+arithmetic, a mismatch gave NaN. Matched by position, the values of
+different times would be paired without an error, so the boundary raises
+``ValueError`` unless the indexes are equal. The usual mismatch is data with
+gaps, which users can reindex first. Checking costs nothing when the Series
+share an index object, as the columns of a DataFrame do, and about 70 µs for
+a year of 1-minute data otherwise.
 
 
 Why xarray gets size-1 dimensions
@@ -201,7 +208,10 @@ hold only NumPy data.
 Unix seconds need float64. Between 2004 and 2038 they lie between 2\
 :sup:`30` and 2\ :sup:`31`, where float32 values are 128 s apart. PyTorch and
 JAX create float32 arrays by default, so a check that raises is better than
-a solar position that is silently minutes off.
+a solar position that is silently minutes off. The boundary converts the
+``'unix'`` arguments to float64 separately from the other arrays, so integer
+seconds stay exact with float32 data, and raises ``TypeError`` for
+floating point seconds that aren't float64.
 
 Calendar fields come from H. Hinnant's `civil_from_days
 <https://howardhinnant.github.io/date_algorithms.html>`_, written with

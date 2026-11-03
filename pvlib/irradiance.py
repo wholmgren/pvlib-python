@@ -30,8 +30,14 @@ def __getattr__(attr):
     raise AttributeError(f"module {__name__!r} has no attribute {attr!r}")
 
 
-def get_extra_radiation(datetime_or_doy, solar_constant=1366.1,
-                        method='spencer', epoch_year=2014, **kwargs):
+# defaults of get_extra_radiation, which erbs uses too
+_SOLAR_CONSTANT = 1366.1
+_EXTRA_RADIATION_METHOD = 'spencer'
+
+
+def get_extra_radiation(datetime_or_doy, solar_constant=_SOLAR_CONSTANT,
+                        method=_EXTRA_RADIATION_METHOD, epoch_year=2014,
+                        **kwargs):
     """
     Determine extraterrestrial radiation from day of year.
 
@@ -570,7 +576,7 @@ def poa_components(aoi, dni, poa_sky_diffuse, poa_ground_diffuse, *, xp):
     Negative beam irradiation due to AOI > 90° or AOI < 0° is set to zero.
     '''
 
-    # a DataFrame poa_sky_diffuse arrives here as a dict, see pandas_io
+    # a DataFrame poa_sky_diffuse arrives here as a dict, see labeled_io
     if isinstance(poa_sky_diffuse, dict):
         sky_components = poa_sky_diffuse.copy()
         total_poa_sky_diffuse = sky_components.pop('poa_sky_diffuse')
@@ -2817,8 +2823,8 @@ def erbs(ghi, zenith, datetime_or_doy, min_cos_zenith=0.065, max_zenith=87, *,
 
     # datetime_or_doy is the day of year here, from labeled_io
     # get_extra_radiation(doy), with its default solar constant and method
-    dni_extra = _extra_radiation_from_doy.core(datetime_or_doy, 1366.1,
-                                               'spencer', xp=xp)
+    dni_extra = _extra_radiation_from_doy.core(
+        datetime_or_doy, _SOLAR_CONSTANT, _EXTRA_RADIATION_METHOD, xp=xp)
 
     kt = clearness_index.core(ghi, zenith, dni_extra,
                               min_cos_zenith=min_cos_zenith,

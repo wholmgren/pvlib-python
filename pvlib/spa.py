@@ -1000,9 +1000,19 @@ _FORMULAS = (
 )
 
 
-def _sum_mult_cos_add_mult_xp(arr, x, xp):
+# the coefficient tables as lists of rows, which the array API versions loop
+# over, made once rather than in every call. _formulas gives the formulas
+# these lists in place of the arrays
+_TABLE_ROWS = {name: globals()[name].tolist() for name in (
+    'L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'B0', 'B1', 'R0', 'R1', 'R2', 'R3',
+    'R4')}
+_NUTATION_ROWS = list(zip(NUTATION_YTERM_ARRAY.tolist(),
+                          NUTATION_ABCD_ARRAY.tolist()))
+
+
+def _sum_mult_cos_add_mult_xp(rows, x, xp):
     s = 0.
-    for a, b, c in arr.tolist():
+    for a, b, c in rows:
         s = s + a * xp.cos(b + c * x)
     return s
 
@@ -1011,8 +1021,7 @@ def _longitude_obliquity_nutation_xp(julian_ephemeris_century, x0, x1, x2,
                                      x3, x4, xp):
     delta_psi_sum = 0.
     delta_eps_sum = 0.
-    for (y0, y1, y2, y3, y4), (a, b, c, d) in zip(
-            NUTATION_YTERM_ARRAY.tolist(), NUTATION_ABCD_ARRAY.tolist()):
+    for (y0, y1, y2, y3, y4), (a, b, c, d) in _NUTATION_ROWS:
         arg = _xa.deg2rad(y0*x0 + y1*x1 + y2*x2 + y3*x3 + y4*x4)
         delta_psi_sum = (delta_psi_sum
                          + (a + b * julian_ephemeris_century) * xp.sin(arg))
@@ -1073,7 +1082,7 @@ class _NumpyNames:
 
 @functools.lru_cache
 def _formulas(xp):
-    env = dict(globals(), np=_NumpyNames(xp))
+    env = dict(globals(), np=_NumpyNames(xp), **_TABLE_ROWS)
     funcs = {}
     for name in _FORMULAS:
         f = globals()[name]
@@ -1107,7 +1116,7 @@ def solar_position_numpy(unixtime, lat, lon, elev, pressure, temp, delta_t,
                              delta_t, atmos_refract)
     (unixtime, lat, lon, elev, pressure, temp, delta_t,
      atmos_refract) = _xa.asarrays(unixtime, lat, lon, elev, pressure, temp,
-                                   delta_t, atmos_refract, xp=xp)
+                                   delta_t, atmos_refract, xp=xp, unix=(0,))
     if unixtime.dtype != xp.float64:
         raise TypeError('SPA needs float64 times; got unixtime with dtype '
                         f'{unixtime.dtype}')
@@ -1227,13 +1236,18 @@ def solar_position(unixtime, lat, lon, elev, pressure, temp, delta_t,
     solar radiation applications. Solar Energy, vol. 81, no. 6, p. 838, 2007.
     """
     if USE_NUMBA:
-        do_calc = solar_position_numba
-    else:
-        do_calc = solar_position_numpy
+        # the compiled loop takes 1-D times; the result gets their shape
+        shape = np.shape(unixtime)
+        if np.ndim(delta_t):
+            delta_t = np.ravel(np.broadcast_to(delta_t, shape))
+        result = solar_position_numba(np.ravel(unixtime), lat, lon, elev,
+                                      pressure, temp, delta_t, atmos_refract,
+                                      numthreads, sst, esd)
+        return result.reshape(result.shape[:1] + shape)
 
-    result = do_calc(unixtime, lat, lon, elev, pressure,
-                     temp, delta_t, atmos_refract, numthreads,
-                     sst, esd)
+    result = solar_position_numpy(unixtime, lat, lon, elev, pressure,
+                                  temp, delta_t, atmos_refract, numthreads,
+                                  sst, esd)
 
     if not isinstance(result, np.ndarray):
         xp = _xa.array_namespace(*result)
@@ -1411,8 +1425,8 @@ def calculate_deltat(year, month):
           'Delta values will be calculated, but the calculations ' \
           'are not intended to be used for these years.'
 
+    xp = _xa.array_namespace(year, month)
     try:
-        xp = _xa.array_namespace(year, month)
         # skip the check for lazy arrays, where it would force evaluation
         if _xa.known_any((year > 3000) | (year < -1999), xp):
             warnings.warn(plw)

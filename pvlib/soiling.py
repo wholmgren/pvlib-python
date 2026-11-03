@@ -61,7 +61,7 @@ def hsu(rainfall, cleaning_threshold, surface_tilt, pm2_5, pm10,
     times : DatetimeIndex or array, optional
         Times of ``rainfall``, increasing. Taken from the index of
         ``rainfall`` if it is a Series; required otherwise. A numeric array
-        is float64 seconds since 1970-01-01 00:00 UTC.
+        is seconds since 1970-01-01 00:00 UTC, integer or float64.
 
     Returns
     -------
