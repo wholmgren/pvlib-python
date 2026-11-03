@@ -87,9 +87,9 @@ pac = inverter.pvwatts(pdc, pdc0=1000)
 energy = pac.sum('time') / 1000  # kWh per kW, from hourly power in W
 
 best = energy.isel(energy.argmax(...))
-print(f"Best: tilt {best['tilt'].item():.0f}°, "
-      f"azimuth {best['azimuth'].item():.0f}°, "
-      f"{best.item():.0f} kWh per kW")
+print(f"Best: tilt {round(best['tilt'].item())}°, "
+      f"azimuth {round(best['azimuth'].item())}°, "
+      f"{round(best.item())} kWh per kW")
 
 # %%
 # The map shows the energy lost relative to the best orientation.
@@ -107,7 +107,7 @@ ax.set_xticks([90, 135, 180, 225, 270],
               ['E 90', 'SE 135', 'S 180', 'SW 225', 'W 270'])
 ax.set_xlabel('Surface azimuth [°]')
 ax.set_ylabel('Surface tilt [°]')
-ax.set_title(f'Greensboro, NC, latitude {metadata["latitude"]:.0f}°')
+ax.set_title(f'Greensboro, NC, latitude {round(metadata["latitude"])}°')
 plt.show()
 
 # %%
@@ -125,7 +125,7 @@ orientations = {
     'vertical, facing south': (90, 180),
 }
 for name, (t, a) in orientations.items():
-    print(f'{name}: {loss.sel(tilt=t, azimuth=a).item():.0f}% loss')
+    print(f'{name}: {round(loss.sel(tilt=t, azimuth=a).item())}% loss')
 
 # %%
 # To compare orientations at another site, change the weather data. Any

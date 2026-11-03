@@ -135,14 +135,14 @@ with_gradient(start_horizon), without_gradient(start_horizon)  # compile
 start = time.perf_counter()
 fit = minimize(with_gradient, start_horizon, jac=True, method='L-BFGS-B',
                bounds=bounds)
-seconds = time.perf_counter() - start
-print(f'With gradients from JAX: {fit.nfev} model runs, {seconds:.2f} s')
+seconds = format(time.perf_counter() - start, '.2f')
+print(f'With gradients from JAX: {fit.nfev} model runs, {seconds} s')
 
 start = time.perf_counter()
 fit_fd = minimize(without_gradient, start_horizon, method='L-BFGS-B',
                   bounds=bounds)
-seconds = time.perf_counter() - start
-print(f'With finite differences: {fit_fd.nfev} model runs, {seconds:.2f} s')
+seconds = format(time.perf_counter() - start, '.2f')
+print(f'With finite differences: {fit_fd.nfev} model runs, {seconds} s')
 
 # %%
 # Both fits find the same horizon. The plot shows it with the true horizon

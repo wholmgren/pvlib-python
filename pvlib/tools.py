@@ -281,7 +281,7 @@ def unix_to_doy(t, *, xp):
     np.float64(365.0)
     """
     if t.dtype != xp.float64:
-        raise TypeError(f't must be float64; got dtype {t.dtype}')
+        raise TypeError(f't must be float64, not {t.dtype}')
     return _xa.unix_to_civil(t, xp)[3]
 
 

@@ -67,7 +67,7 @@ def test_unix_to_doy(backend):
     name, mod, a = backend
     times = pd.date_range('1899-12-30', '2101-01-02', freq='37h', tz='UTC')
     out = tools.unix_to_doy(a(tools.datetime_to_unix(times)))
-    assert type(out) is type(a([0.]))
+    assert isinstance(out, type(a([0.])))
     np.testing.assert_array_equal(_to_numpy(out), times.day_of_year)
 
 
@@ -232,7 +232,7 @@ def test_time_series_chain(backend, weather):
     assert isinstance(expected, pd.Series)
     assert expected.index.equals(weather.index)
     out = _ac_power_arrays(weather, 25., a)
-    assert type(out) is type(a([0.]))
+    assert isinstance(out, type(a([0.])))
     assert_allclose(_to_numpy(out), expected, atol=1e-9)
 
 
