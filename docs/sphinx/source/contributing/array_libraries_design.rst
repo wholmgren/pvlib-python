@@ -127,8 +127,10 @@ scikit-learn moves inputs to the library and device of one argument, ``X``
 for estimators; pvlib functions have no such argument, so size decides.
 
 **Libraries don't mix,** except NumPy with Dask, since Dask arrays are NumPy
-arrays computed lazily, and xarray mixes them the same way. Python scalars
-mix with anything, as the standard allows in arithmetic.
+arrays computed lazily, and xarray mixes them the same way: a grid may hold
+some DataArrays in memory and others in Dask. Python scalars mix with
+anything, as the standard allows in arithmetic, and so do datetimes (see
+:ref:`array-design-time`).
 
 **Scalars in, NumPy scalar out,** as NumPy ufuncs do, and as pvlib did
 before.
@@ -182,7 +184,11 @@ The standard has no datetime dtype, so time reaches the core as a number,
 the one the model uses: Unix seconds for solar position, which ``pvlib.spa``
 already worked in, the day of year for extraterrestrial radiation, and
 seconds for durations. All are UTC. Datetimes come as pandas and NumPy
-objects on the CPU, so the boundary converts them with pandas.
+objects on the CPU, so the boundary converts them with pandas, then moves
+the numbers to the library and device of the other array arguments.
+Datetimes therefore work with data from any library, and don't decide where
+the calculation runs. The result then has the data's type: a Series would
+hold only NumPy data.
 
 Unix seconds need float64. Between 2004 and 2038 they lie between 2\
 :sup:`30` and 2\ :sup:`31`, where float32 values are 128 s apart. PyTorch and
@@ -289,7 +295,8 @@ adopters, and both are still experimental.
      - found at the top of each function
      - found by ``get_namespace``; helpers take ``xp``
    * - Mixed libraries
-     - raise, except NumPy with Dask; scalars mix with any library
+     - raise, except NumPy with Dask; scalars and datetimes mix with any
+       library
      - raise; scalars and lists mix only with NumPy
      - converted to follow ``X`` or ``y_pred``
    * - Masked arrays

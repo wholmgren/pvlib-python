@@ -194,9 +194,10 @@ Time
 ~~~~
 
 The standard has no datetime type, so the core gets time as numbers: declare
-the parameter in ``time`` and the boundary converts datetimes. Numbers pass
-through unchanged, which is how PyTorch and JAX users give time. Inside the
-core, use these instead of pandas:
+the parameter in ``time`` and the boundary converts datetimes, to arrays of
+the same library and on the same device as the other array arguments.
+Numbers pass through unchanged. Inside the core, use these instead of
+pandas:
 
 =========================================  ==========================================
 pandas                                     In a core

@@ -113,8 +113,8 @@ def test_spa_python_xarray_grid():
 
 
 def test_spa_python_xarray_grid_on_dask():
-    # time is converted to a NumPy array at the boundary and joins the Dask
-    # arrays of the grid
+    # time is converted at the boundary and follows the Dask arrays of the
+    # grid
     xr = pytest.importorskip('xarray')
     pytest.importorskip('dask')
     import dask.array as da
@@ -138,6 +138,47 @@ def test_erbs_day_of_year(backend, weather):
     out = irradiance.erbs(a(weather['ghi']), a(zenith), doy)
     for key in expected:
         assert_allclose(_to_numpy(out[key]), expected[key])
+
+
+def test_datetimes_with_data_from_any_library(backend, weather):
+    # datetimes are converted at the boundary and follow the library of the
+    # data, which also decides the type of the result
+    name, mod, a = backend
+    times = weather.index
+    position = solarposition.spa_python(times, LAT, LON)
+    lat = a([LAT])
+    out = solarposition.spa_python(times, lat, LON)
+    assert type(out['zenith']) is type(lat)
+    assert_allclose(_to_numpy(out['zenith']), position['zenith'], atol=1e-9)
+
+    zenith = position['zenith']
+    expected = irradiance.erbs(weather['ghi'], zenith, times)
+    out = irradiance.erbs(a(weather['ghi']), a(zenith), times)
+    for key in expected:
+        assert type(out[key]) is type(lat)
+        assert_allclose(_to_numpy(out[key]), expected[key])
+
+    expected = soiling.hsu(weather['rain'], 0.5, 20., 1e-2, 2e-2)
+    out = soiling.hsu(a(weather['rain']), 0.5, 20., 1e-2, 2e-2, times=times)
+    assert type(out) is type(lat)
+    assert_allclose(_to_numpy(out), expected)
+
+
+def test_datetimes_follow_the_device_of_the_data(weather):
+    # PyTorch's meta device stands in for a GPU
+    torch = _torch()
+    data = torch.empty(len(weather), dtype=torch.float64, device='meta')
+    out = irradiance.erbs(data, data, weather.index)
+    assert out['dni'].device.type == 'meta'
+
+
+def test_jax_jit_with_datetimes(weather):
+    jnp = _jax()
+    import jax
+    f = jax.jit(lambda latitude: solarposition.spa_python(
+        weather.index, latitude, LON)['zenith'])
+    expected = solarposition.spa_python(weather.index, LAT, LON)['zenith']
+    assert_allclose(np.asarray(f(jnp.asarray(LAT))), expected, atol=1e-9)
 
 
 def test_hsu_irregular_times(backend, weather):

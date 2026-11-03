@@ -15,6 +15,9 @@ such as PyTorch, JAX, CuPy and Dask. With them you can
 - compile a model with ``jax.jit``, or run it on a GPU;
 - model data larger than memory with Dask.
 
+Support for array libraries other than NumPy is experimental, and details
+may change between releases.
+
 Supported functions
 -------------------
 
@@ -65,8 +68,8 @@ xarray DataArrays               DataArray, or a Dataset for several outputs
 arrays from another library     arrays from that library
 ==============================  ==============================================
 
-Scalars mix with any of these. Arrays from two libraries don't mix, except
-NumPy arrays with Dask arrays, so convert first. The result has the common
+Scalars and datetimes mix with any of these. Arrays from two libraries don't
+mix, except NumPy arrays with Dask arrays, so convert first. The result has the common
 floating point type of the inputs, float64 if none is floating point, and is
 on the device of the largest input array. Dask arrays stay lazy: the result
 is computed when you call ``.compute()``.
@@ -117,11 +120,13 @@ numbers:
   :py:func:`~pvlib.irradiance.erbs` take the day of year.
 
 Datetimes from pandas, NumPy and xarray are converted to these numbers when
-the function is called, so code that passes datetimes works as before. For
-other libraries, convert times with :py:func:`pvlib.tools.datetime_to_unix`,
-and get the day of year from Unix seconds with
-:py:func:`pvlib.tools.unix_to_doy`, which works on any array library and
-inside ``jax.jit``.
+the function is called, as arrays of the same library as the other inputs
+and on the same device. So code that passes datetimes works as before, with
+data from any library. With other data the result has that library's type,
+not a pandas type. To convert once for many calls, use
+:py:func:`pvlib.tools.datetime_to_unix`, and get the day of year from Unix
+seconds with :py:func:`pvlib.tools.unix_to_doy`, which works on any array
+library and inside ``jax.jit``.
 
 Unix seconds must be float64: in float32 they resolve only 128 seconds, and
 :py:func:`~pvlib.solarposition.spa_python` raises ``TypeError``. PyTorch and

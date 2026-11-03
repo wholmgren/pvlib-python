@@ -211,6 +211,24 @@ def _timedelta_to_seconds(x):
     return x
 
 
+def _times_follow_data(arguments, times):
+    """
+    Move the ``times`` arguments, converted from datetimes to NumPy arrays on
+    the CPU, to the library and device of the other array arguments, so
+    datetimes work with data from any library and don't decide where the
+    calculation runs.
+    """
+    others = [v for k, v in arguments.items() if k not in times
+              and is_array_api_obj(v) and not isinstance(v, np.generic)]
+    xp = array_namespace(*others)
+    if xp is np_compat:
+        return
+    device = array_api_compat.device(max(others, key=_size))
+    for k in times:
+        if isinstance(arguments[k], np.ndarray):
+            arguments[k] = xp.asarray(arguments[k], device=device)
+
+
 # --- time inside the core ---------------------------------------------------
 
 def unix_to_civil(t, xp):
@@ -342,12 +360,20 @@ def _wrap_masked(out, masks):
     return out
 
 
+def _is_numpy(x):
+    return not is_array_api_obj(x) or isinstance(x, (np.ndarray, np.generic))
+
+
 def _wrap_pandas(out, index, name):
+    # pandas holds NumPy data. A result from another library, for data
+    # given with a DatetimeIndex, stays in that library
     if isinstance(out, dict):
-        return pd.DataFrame(out, index=index)
+        if all(_is_numpy(v) for v in out.values()):
+            return pd.DataFrame(out, index=index)
+        return out
     if isinstance(out, tuple):
         return tuple(_wrap_pandas(o, index, None) for o in out)
-    if is_array_api_obj(out) and getattr(out, 'ndim', 0) == 1:
+    if isinstance(out, np.ndarray) and out.ndim == 1:
         return pd.Series(out, index=index, name=name)
     return out
 
@@ -478,17 +504,18 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
     a common floating-point dtype and device. Once per call, the boundary
 
     1. converts pandas Series to NumPy arrays and DataFrames to dicts of
-       them, datetimes to numbers (see ``time``), and masked arrays to arrays
+       them, datetimes to numbers (see ``time``) in the library and on the
+       device of the other array arguments, and masked arrays to arrays
        with NaN at masked positions. xarray DataArrays are aligned and
        broadcast by dimension name and replaced by their underlying arrays,
        which may be from any array library;
     2. finds the namespace of the ``arrays`` arguments and converts them with
        :py:func:`asarrays`;
-    3. calls the core, and wraps its result: a 1-D array as a Series and a
-       dict as a DataFrame on the index of the first pandas argument, an
-       array as a DataArray and a dict as a Dataset, masked wherever any
-       masked argument was, or as a NumPy scalar if all arguments were
-       scalars.
+    3. calls the core, and wraps its result: a 1-D NumPy array as a Series
+       and a dict of them as a DataFrame on the index of the first pandas
+       argument, an array as a DataArray and a dict as a Dataset, masked
+       wherever any masked argument was, or as a NumPy scalar if all
+       arguments were scalars.
 
     pvlib functions call each other's cores, ``f.core(..., xp=xp)``, with
     arguments that are already arrays of ``xp``, so this work isn't repeated.
@@ -552,7 +579,9 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
                 given[k] = v
             return given
 
-        def call_core(arguments):
+        def call_core(arguments, times):
+            if times:
+                _times_follow_data(arguments, times)
             xp = _convert_arrays(arguments, arrays)
             return func(**arguments, xp=xp)
 
@@ -575,15 +604,18 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
                 import xarray as xr
                 # signature order sets the order of the result's dimensions
                 arguments = {k: arguments[k] for k in names if k in arguments}
+                times = []
                 for k, kind in time.items():
                     v = arguments.get(k)
                     if _is_dataarray(v) and _is_datetime_like(v):
                         arguments[k] = xr.DataArray(
                             _datetime_to_number(v.values, kind),
                             dims=v.dims, coords=v.coords, name=v.name)
+                        times.append(k)
                 return _call_xarray(func, arguments,
-                                    lambda: call_core(arguments), out_name)
-            found, masks = [], []
+                                    lambda: call_core(arguments, times),
+                                    out_name)
+            found, masks, times = [], [], []
             for k in keys:
                 v = arguments[k]
                 # convert time first: unwrapping a tz-aware Series of
@@ -592,11 +624,12 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
                     if isinstance(v, (pd.Series, pd.DatetimeIndex)):
                         found.append(v)
                     arguments[k] = _datetime_to_number(v, time[k])
+                    times.append(k)
                 else:
                     arguments[k] = _unwrap(v, found, masks)
             scalar = not found and not masks and _all_scalar(
                 [arguments[k] for k in keys])
-            out = call_core(arguments)
+            out = call_core(arguments, times)
             if not found:
                 if masks:
                     return _wrap_masked(out, masks)
