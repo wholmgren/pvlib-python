@@ -20,6 +20,7 @@ from pvlib import (atmosphere, iam, inverter, irradiance,
                    singlediode as _singlediode, spectrum, temperature)
 from pvlib.tools import _build_kwargs, _build_args
 import pvlib.tools as tools
+from pvlib import _array_api as _xa
 
 
 # a dict of required parameter names for each DC power model
@@ -3049,8 +3050,13 @@ def scale_voltage_current_power(data, voltage=1, current=1):
     return df_sorted
 
 
+@_xa.labeled_io(
+    name=lambda arguments: (
+        None if arguments['k'] is not None else _xa.labeled_io.INFER),
+    arrays=('effective_irradiance', 'temp_cell', 'pdc0', 'gamma_pdc',
+            'temp_ref', 'k'))
 def pvwatts_dc(effective_irradiance, temp_cell, pdc0, gamma_pdc, temp_ref=25.,
-               k=None, cap_adjustment=False):
+               k=None, cap_adjustment=False, *, xp):
     r"""
     Implement NLR's PVWatts (Version 5) DC power model.
 
@@ -3135,30 +3141,20 @@ def pvwatts_dc(effective_irradiance, temp_cell, pdc0, gamma_pdc, temp_ref=25.,
     # apply Marion's correction if k is provided
     if k is not None:
 
-        # preserve input types
-        index = pdc.index if isinstance(pdc, pd.Series) else None
-        is_scalar = np.isscalar(pdc)
-
         # calculate error adjustments
         err_1 = k * (1 - (1 - effective_irradiance / 200)**4)
         err_2 = k * (1000 - effective_irradiance) / (1000 - 200)
-        err = np.where(effective_irradiance <= 200, err_1, err_2)
+        err = xp.where(effective_irradiance <= 200, err_1, err_2)
 
         # cap adjustment, if needed
         if cap_adjustment:
-            err = np.where(effective_irradiance >= 1000, 0, err)
+            err = xp.where(effective_irradiance >= 1000, 0., err)
 
         # make error adjustment
         pdc = pdc - pdc0 * err
 
         # set negative power to zero
-        pdc = np.where(pdc < 0, 0, pdc)
-
-        # preserve input types
-        if index is not None:
-            pdc = pd.Series(pdc, index=index)
-        elif is_scalar:
-            pdc = float(pdc)
+        pdc = xp.where(pdc < 0, 0., pdc)
 
     return pdc
 

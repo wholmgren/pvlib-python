@@ -12,7 +12,11 @@ import pandas as pd
 from packaging.version import Version
 import zoneinfo
 
+from pvlib import _array_api as _xa
 
+
+# no labeled_io here: NumPy ufuncs already keep pandas and xarray types.
+# Cores call the private versions, which take the namespace
 def cosd(angle):
     """
     Trigonometric cosine with angle input in degrees.
@@ -27,8 +31,11 @@ def cosd(angle):
     result : float or array-like
         Cosine of the angle
     """
-    res = np.cos(np.radians(angle))
-    return res
+    return _cosd(angle, _xa.array_namespace(angle))
+
+
+def _cosd(angle, xp):
+    return xp.cos(_xa.deg2rad(angle))
 
 
 def sind(angle):
@@ -45,8 +52,11 @@ def sind(angle):
     result : float
         Sin of the angle
     """
-    res = np.sin(np.radians(angle))
-    return res
+    return _sind(angle, _xa.array_namespace(angle))
+
+
+def _sind(angle, xp):
+    return xp.sin(_xa.deg2rad(angle))
 
 
 def tand(angle):
@@ -63,8 +73,11 @@ def tand(angle):
     result : float
         Tan of the angle
     """
-    res = np.tan(np.radians(angle))
-    return res
+    return _tand(angle, _xa.array_namespace(angle))
+
+
+def _tand(angle, xp):
+    return xp.tan(_xa.deg2rad(angle))
 
 
 def asind(number):
@@ -81,8 +94,11 @@ def asind(number):
     result : float
         arcsin result
     """
-    res = np.degrees(np.arcsin(number))
-    return res
+    return _asind(number, _xa.array_namespace(number))
+
+
+def _asind(number, xp):
+    return _xa.rad2deg(xp.asin(number))
 
 
 def acosd(number):
@@ -99,8 +115,11 @@ def acosd(number):
     result : float
         arccos result
     """
-    res = np.degrees(np.arccos(number))
-    return res
+    return _acosd(number, _xa.array_namespace(number))
+
+
+def _acosd(number, xp):
+    return _xa.rad2deg(xp.acos(number))
 
 
 def atand(number):
@@ -117,8 +136,11 @@ def atand(number):
     result : float
         arctan result
     """
-    res = np.degrees(np.arctan(number))
-    return res
+    return _atand(number, _xa.array_namespace(number))
+
+
+def _atand(number, xp):
+    return _xa.rad2deg(xp.atan(number))
 
 
 def localize_to_utc(time, location):
@@ -197,6 +219,72 @@ def djd_to_datetime(djd, tz='UTC'):
     return utc_time.astimezone(zoneinfo.ZoneInfo(tz))
 
 
+def datetime_to_unix(time):
+    """
+    Convert times to seconds since 1970-01-01 00:00 UTC.
+
+    Functions that take times also accept them as these numbers, for
+    example as a PyTorch or JAX array, which have no datetime type.
+
+    Parameters
+    ----------
+    time : pandas.DatetimeIndex, pandas.Series, numpy.ndarray, or scalar
+        Datetimes. Times without a time zone are taken as UTC.
+
+    Returns
+    -------
+    numpy.ndarray or numpy.float64
+        float64 seconds since 1970-01-01 00:00 UTC, in the shape of
+        ``time``.
+
+    See Also
+    --------
+    unix_to_doy
+
+    Examples
+    --------
+    >>> times = pd.date_range('2026-06-01 12:00', periods=2, freq='1h',
+    ...                       tz='Etc/GMT+7')
+    >>> datetime_to_unix(times)
+    array([1.7803404e+09, 1.7803440e+09])
+    """
+    return _xa._datetime_to_number(time, 'unix')
+
+
+@_xa.labeled_io(name=None, arrays=('t',))
+def unix_to_doy(t, *, xp):
+    """
+    Day of year, in UTC, of times in seconds since 1970-01-01 00:00 UTC.
+
+    Works on arrays from any library that supports the Python array API
+    standard, also inside ``jax.jit``, so a model that keeps time as Unix
+    seconds needs no datetimes to get the day of year.
+
+    Parameters
+    ----------
+    t : numeric, array-like, pandas.Series, or xarray.DataArray
+        float64 seconds since 1970-01-01 00:00 UTC. In float32 these
+        resolve only 128 s, so float32 raises TypeError.
+
+    Returns
+    -------
+    numeric, array, pandas.Series, or xarray.DataArray
+        Day of year, 1 on January 1, as floats.
+
+    See Also
+    --------
+    datetime_to_unix
+
+    Examples
+    --------
+    >>> unix_to_doy(datetime_to_unix(pd.Timestamp('2026-12-31 23:00')))
+    np.float64(365.0)
+    """
+    if t.dtype != xp.float64:
+        raise TypeError(f't must be float64, not {t.dtype}')
+    return _xa.unix_to_civil(t, xp)[3]
+
+
 def _pandas_to_doy(pd_object):
     """
     Finds the day of year for a pandas datetime-like object.
@@ -215,7 +303,8 @@ def _pandas_to_doy(pd_object):
     -----
     Day of year is determined using UTC, since pandas uses local hour
     """
-    return _pandas_to_utc(pd_object).day_of_year
+    doy = _xa._datetime_to_number(pd_object, 'doy')
+    return pd.Index(doy) if np.ndim(doy) else doy
 
 
 def _pandas_to_utc(pd_object):
@@ -539,7 +628,9 @@ def _degrees_to_index(degrees, coordinate):
         else:
             raise err
     # If the index wasn't set to outputmax or 0, round it and cast it as an
-    # integer so it can be used in integer-based indexing.
+    # integer so it can be used in integer-based indexing. np.around rounds
+    # halves to even, so degrees on the edge between two cells (a multiple
+    # of 1/12 degree for pvlib's maps) give the even-numbered cell.
     else:
         index = int(np.around(index))
 

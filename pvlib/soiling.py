@@ -5,13 +5,20 @@ This module contains functions for soiling models
 import datetime
 import numpy as np
 import pandas as pd
-from scipy.special import erf
 
-from pvlib.tools import cosd
+from pvlib.tools import _cosd
+from pvlib import _array_api as _xa
+
+_RAIN_TOLERANCE = 1e-9  # mm, see hsu
 
 
+@_xa.labeled_io(name=None,
+                arrays=('rainfall', 'times', 'surface_tilt', 'pm2_5', 'pm10'),
+                time={'times': 'unix'}, timedelta=('rain_accum_period',),
+                index_time='times')
 def hsu(rainfall, cleaning_threshold, surface_tilt, pm2_5, pm10,
-        depo_veloc=None, rain_accum_period=pd.Timedelta('1h')):
+        depo_veloc=None, rain_accum_period=pd.Timedelta('1h'), times=None, *,
+        xp):
     """
     Calculates soiling ratio given particulate and rain data using the
     Fixed Velocity model from Humboldt State University (HSU).
@@ -25,7 +32,7 @@ def hsu(rainfall, cleaning_threshold, surface_tilt, pm2_5, pm10,
     Parameters
     ----------
 
-    rainfall : Series
+    rainfall : Series or array
         Rain accumulated in each time period. [mm]
 
     cleaning_threshold : float
@@ -49,11 +56,16 @@ def hsu(rainfall, cleaning_threshold, surface_tilt, pm2_5, pm10,
     rain_accum_period : Timedelta, default 1 hour
         Period for accumulating rainfall to check against `cleaning_threshold`
         It is recommended that `rain_accum_period` be between 1 hour and
-        24 hours.
+        24 hours. A number is in seconds.
+
+    times : DatetimeIndex or array, optional
+        Times of ``rainfall``, increasing. Taken from the index of
+        ``rainfall`` if it is a Series; required otherwise. A numeric array
+        is seconds since 1970-01-01 00:00 UTC, integer or float64.
 
     Returns
     -------
-    soiling_ratio : Series
+    soiling_ratio : Series or array
         Values between 0 and 1. Equal to 1 - transmission loss.
 
     Notes
@@ -84,35 +96,46 @@ def hsu(rainfall, cleaning_threshold, surface_tilt, pm2_5, pm10,
     if depo_veloc is None:
         depo_veloc = {'2_5': 0.0009, '10': 0.004}
 
-    # accumulate rainfall into periods for comparison with threshold
-    accum_rain = rainfall.rolling(rain_accum_period, closed='right').sum()
-    # cleaning is True for intervals with rainfall greater than threshold
-    cleaning_times = accum_rain.index[accum_rain >= cleaning_threshold]
+    # times is seconds since 1970-01-01 UTC and rain_accum_period is
+    # seconds, from labeled_io
 
-    # determine the time intervals in seconds (dt_sec)
-    dt = rainfall.index
-    # subtract shifted values from original and convert to seconds
-    dt_diff = (dt[1:] - dt[:-1]).total_seconds()
-    # ensure same number of elements in the array, assuming that the interval
-    # prior to the first value is equal in length to the first interval
-    dt_sec = np.append(dt_diff[0], dt_diff).astype('float64')
+    # pandas rolling raises for an unsorted index; the window sums below
+    # would be silently wrong
+    if _xa.known_any(xp.diff(times) < 0, xp):
+        raise ValueError('times must be increasing')
+
+    # accumulate rainfall into periods for comparison with threshold.
+    # rolling(closed='right') skips missing values
+    rain = xp.where(xp.isnan(rainfall), 0., rainfall)
+    accum_rain = _xa.rolling_sum(rain, times, rain_accum_period, xp=xp)
+    # cleaning is True for intervals with rainfall greater than threshold.
+    # A sum that equals the threshold (quantized rain) carries rounding error
+    # that differs between summation methods, pandas' included, so count
+    # sums within 1e-9 mm of it as reaching it
+    cleaning = accum_rain >= cleaning_threshold - _RAIN_TOLERANCE
+
+    # determine the time intervals in seconds (dt_sec), assuming that the
+    # interval prior to the first value is equal in length to the first
+    dt_diff = xp.diff(times)
+    dt_sec = xp.concat([dt_diff[:1], dt_diff])
 
     horiz_mass_rate = (
-        pm2_5 * depo_veloc['2_5'] + np.maximum(pm10 - pm2_5, 0.)
+        pm2_5 * depo_veloc['2_5'] + xp.maximum(pm10 - pm2_5, 0.)
         * depo_veloc['10']) * dt_sec
-    tilted_mass_rate = horiz_mass_rate * cosd(surface_tilt)  # assuming no rain
+    # assuming no rain
+    tilted_mass_rate = horiz_mass_rate * _cosd(surface_tilt, xp)
 
     # tms -> tilt_mass_rate
-    tms_cumsum = np.cumsum(tilted_mass_rate * np.ones(rainfall.shape))
+    mass_no_cleaning = xp.cumulative_sum(
+        tilted_mass_rate + xp.zeros_like(rainfall))
+    # each cleaning removes all the mass accumulated up to that time
+    mass_removed = _xa.take_last(mass_no_cleaning, cleaning, xp=xp)
+    accum_mass = mass_no_cleaning - mass_removed
 
-    mass_no_cleaning = pd.Series(index=rainfall.index, data=tms_cumsum)
-    # specify dtype so pandas doesn't assume object
-    mass_removed = pd.Series(index=rainfall.index, dtype='float64')
-    mass_removed.iloc[0] = 0.
-    mass_removed[cleaning_times] = mass_no_cleaning[cleaning_times]
-    accum_mass = mass_no_cleaning - mass_removed.ffill()
-
-    soiling_ratio = 1 - 0.3437 * erf(0.17 * accum_mass**0.8473)
+    # accum_mass**0.8473 has an infinite derivative at 0, e.g. after cleaning
+    mass_term = _xa.where_safe(accum_mass > 0, accum_mass,
+                               lambda m: m**0.8473, 0., xp)
+    soiling_ratio = 1 - 0.3437 * _xa.erf(0.17 * mass_term, xp)
 
     return soiling_ratio
 

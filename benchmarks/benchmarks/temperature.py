@@ -49,3 +49,37 @@ class Fuentes:
     def time_fuentes(self):
         pvlib.temperature.fuentes(self.poa, self.tamb, self.wind_speed,
                                   noct_installed=45)
+
+
+def _as_input_type(series, input_type):
+    # a scalar is the middle value
+    if input_type == 'scalar':
+        return float(series.iloc[len(series) // 2])
+    if input_type == 'ndarray':
+        return series.to_numpy()
+    return series
+
+
+class TemperatureInputTypes:
+    params = ['scalar', 'ndarray', 'series']
+    param_names = ['input_type']
+
+    def setup(self, input_type):
+        if Version(pvlib.__version__) < Version('0.8.0'):
+            raise NotImplementedError
+
+        times = pd.date_range(start='20180101', freq='1h', periods=8760)
+        self.poa = _as_input_type(pd.Series(1000., index=times), input_type)
+        self.tamb = _as_input_type(pd.Series(20., index=times), input_type)
+        self.wind_speed = _as_input_type(pd.Series(2., index=times),
+                                         input_type)
+        self.sapm_parameters = \
+            pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS['sapm'][
+                'open_rack_glass_glass']
+
+    def time_sapm_cell(self, input_type):
+        pvlib.temperature.sapm_cell(self.poa, self.tamb, self.wind_speed,
+                                    **self.sapm_parameters)
+
+    def time_faiman(self, input_type):
+        pvlib.temperature.faiman(self.poa, self.tamb, self.wind_speed)

@@ -13,6 +13,7 @@ naming pattern 'fit_<model name>', e.g., fit_sandia.
 import numpy as np
 import pandas as pd
 from numpy.polynomial.polynomial import polyfit  # different than np.polyfit
+from pvlib import _array_api as _xa
 
 
 def _sandia_eff(v_dc, p_dc, inverter):
@@ -333,7 +334,8 @@ def adr(v_dc, p_dc, inverter, vtol=0.10):
     return power_ac
 
 
-def pvwatts(pdc, pdc0, eta_inv_nom=0.96, eta_inv_ref=0.9637):
+@_xa.labeled_io(arrays=('pdc', 'pdc0', 'eta_inv_nom', 'eta_inv_ref'))
+def pvwatts(pdc, pdc0, eta_inv_nom=0.96, eta_inv_ref=0.9637, *, xp):
     r"""
     NLR's PVWatts inverter model.
 
@@ -395,19 +397,18 @@ def pvwatts(pdc, pdc0, eta_inv_nom=0.96, eta_inv_ref=0.9637):
     pac0 = eta_inv_nom * pdc0
     zeta = pdc / pdc0
 
-    # arrays to help avoid divide by 0 for scalar and array
-    eta = np.zeros_like(pdc, dtype=float)
-    pdc_neq_0 = ~np.equal(pdc, 0)
+    # 0.0059 / zeta, but 0 where zeta == 0. where_safe keeps 1/0 out of
+    # both the result and its derivative.
+    zeta_term = _xa.where_safe(zeta != 0, zeta, lambda z: 0.0059 / z, 0., xp)
 
     # eta < 0 if zeta < 0.006. power_ac is forced to be >= 0 below. GH 541
     # In some published versions of [1] the parentheses are missing
     eta = eta_inv_nom / eta_inv_ref * (
-        -0.0162 * zeta - np.divide(0.0059, zeta, out=eta, where=pdc_neq_0)
-        + 0.9858)  # noQA: W503
+        -0.0162 * zeta - zeta_term + 0.9858)
 
     power_ac = eta * pdc
-    power_ac = np.minimum(pac0, power_ac)
-    power_ac = np.maximum(0, power_ac)     # GH 541
+    power_ac = xp.minimum(pac0, power_ac)
+    power_ac = xp.maximum(0., power_ac)     # GH 541
 
     return power_ac
 

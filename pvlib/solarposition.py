@@ -24,6 +24,7 @@ import scipy.optimize as so
 import warnings
 
 from pvlib import atmosphere, tools
+from pvlib import _array_api as _xa
 from pvlib.tools import datetime_to_djd, djd_to_datetime
 
 
@@ -266,16 +267,10 @@ def _spa_python_import(how):
 
 
 def _datetime_to_unixtime(dtindex):
-    # convert a pandas datetime index to unixtime, making sure to handle
-    # different pandas units (ns, us, etc) and time zones correctly
-    if dtindex.tz is not None:
-        # epoch is 1970-01-01 00:00 UTC, but we need to match the input tz
-        # for compatibility with older pandas versions (e.g. v1.3.5)
-        epoch = pd.Timestamp("1970-01-01", tz="UTC").tz_convert(dtindex.tz)
-    else:
-        epoch = pd.Timestamp("1970-01-01")
-
-    return np.array((dtindex - epoch) / pd.Timedelta("1s"))
+    # convert a pandas datetime index to unixtime, handling different pandas
+    # units (ns, us, etc) and time zones. One implementation, shared with
+    # the array API boundary
+    return _xa._datetime_to_number(dtindex, 'unix')
 
 
 def spa_python(time, latitude, longitude,
@@ -294,12 +289,14 @@ def spa_python(time, latitude, longitude,
 
     Parameters
     ----------
-    time : pandas.DatetimeIndex
-        Must be localized or UTC will be assumed.
-    latitude : float
+    time : pandas.DatetimeIndex, datetime-like, or numeric array
+        Must be localized or UTC will be assumed. Numbers, as a scalar, list,
+        Series or array of any array API library, are seconds since
+        1970-01-01 00:00 UTC, integer or float64.
+    latitude : numeric
         Latitude in decimal degrees. Positive north of equator, negative
         to south.
-    longitude : float
+    longitude : numeric
         Longitude in decimal degrees. Positive east of prime meridian,
         negative to west.
     altitude : float, default 0.0
@@ -311,7 +308,7 @@ def spa_python(time, latitude, longitude,
     delta_t : float or array, optional, default 67.0
         Difference between terrestrial time and UT1.
         If delta_t is None, uses spa.calculate_deltat
-        using time.year and time.month from pandas.DatetimeIndex.
+        using the year and month of ``time``.
         For most simulations the default delta_t is sufficient.
         The USNO has historical and forecasted delta_t [3]_.
     atmos_refract : float, optional
@@ -326,8 +323,9 @@ def spa_python(time, latitude, longitude,
 
     Returns
     -------
-    DataFrame
-        The DataFrame will have the following columns:
+    DataFrame, xarray.Dataset or dict of arrays
+        A DataFrame indexed by ``time`` for pandas or datetime-like input,
+        a Dataset for xarray input, otherwise a dict of arrays, with:
 
         - apparent_zenith (degrees),
         - zenith (degrees),
@@ -356,6 +354,45 @@ def spa_python(time, latitude, longitude,
 
     # Added by Tony Lorenzo (@alorenzo175), University of Arizona, 2015
 
+    # numbers, however given, are unix seconds. Other time becomes a
+    # DatetimeIndex, which indexes the result, as before, except xarray
+    # time, which labeled_io converts
+    if _is_unix_seconds(time):
+        if isinstance(time, (list, tuple)):
+            time = np.asarray(time)
+    elif not (isinstance(time, pd.DatetimeIndex) or _xa._is_dataarray(time)):
+        try:
+            time = pd.DatetimeIndex(time)
+        except (TypeError, ValueError):
+            time = pd.DatetimeIndex([time, ])
+
+    return _spa_python(time, latitude, longitude, altitude, pressure,
+                       temperature, delta_t, atmos_refract, how, numthreads)
+
+
+def _is_unix_seconds(time):
+    # numbers: a scalar, or a list, Series or array of any library, but not
+    # bools
+    if isinstance(time, (list, tuple)):
+        time = np.asarray(time)
+    if isinstance(time, (np.ndarray, np.generic, pd.Series)):
+        return time.dtype.kind in 'iuf'
+    if isinstance(time, (int, float)):
+        return not isinstance(time, bool)
+    # arrays of other libraries have no datetime dtype
+    return _xa.is_array_api_obj(time)
+
+
+@_xa.labeled_io(arrays=('time',), time={'time': 'unix'})
+def _spa_python(time, latitude, longitude, altitude, pressure, temperature,
+                delta_t, atmos_refract, how, numthreads, *, xp):
+    # time is seconds since 1970-01-01 UTC, from labeled_io
+    unixtime = time
+    # 2e11 s is the year 8300; nanoseconds (e.g. DatetimeIndex.asi8) are far
+    # larger for any time after 1970-01-01 00:03:20
+    if _xa.known_any(xp.abs(unixtime) > 2e11, xp):
+        raise ValueError('numeric time must be seconds since 1970-01-01 UTC; '
+                         'these look like milli-, micro- or nanoseconds')
     lat = latitude
     lon = longitude
     elev = altitude
@@ -363,29 +400,23 @@ def spa_python(time, latitude, longitude,
 
     atmos_refract = atmos_refract or 0.5667
 
-    if not isinstance(time, pd.DatetimeIndex):
-        try:
-            time = pd.DatetimeIndex(time)
-        except (TypeError, ValueError):
-            time = pd.DatetimeIndex([time, ])
-
-    unixtime = _datetime_to_unixtime(time)
-
     spa = _spa_python_import(how)
 
     if delta_t is None:
-        time_utc = tools._pandas_to_utc(time)
-        delta_t = spa.calculate_deltat(time_utc.year, time_utc.month)
+        year, month, _, _ = _xa.unix_to_civil(unixtime, xp)
+        delta_t = spa.calculate_deltat(year, month)
 
-    app_zenith, zenith, app_elevation, elevation, azimuth, eot = \
-        spa.solar_position(unixtime, lat, lon, elev, pressure, temperature,
-                           delta_t, atmos_refract, numthreads)
+    position = spa.solar_position(unixtime, lat, lon, elev, pressure,
+                                  temperature, delta_t, atmos_refract,
+                                  numthreads)
+    # index rather than unpack: the standard does not define iteration
+    app_zenith, zenith, app_elevation, elevation, azimuth, eot = (
+        position[i, ...] for i in range(6))
 
-    result = pd.DataFrame({'apparent_zenith': app_zenith, 'zenith': zenith,
-                           'apparent_elevation': app_elevation,
-                           'elevation': elevation, 'azimuth': azimuth,
-                           'equation_of_time': eot},
-                          index=time)
+    result = {'apparent_zenith': app_zenith, 'zenith': zenith,
+              'apparent_elevation': app_elevation,
+              'elevation': elevation, 'azimuth': azimuth,
+              'equation_of_time': eot}
 
     return result
 

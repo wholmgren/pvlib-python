@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from pvlib.tools import sind
 from pvlib.tools import _get_sample_intervals
+from pvlib import _array_api as _xa
 import scipy
 import scipy.constants
 import warnings
@@ -54,8 +55,10 @@ def _temperature_model_params(model, parameter_set):
         raise KeyError(msg)
 
 
+@_xa.labeled_io(arrays=('poa_global', 'temp_air', 'wind_speed', 'a', 'b',
+                        'deltaT', 'irrad_ref'))
 def sapm_cell(poa_global, temp_air, wind_speed, a, b, deltaT,
-              irrad_ref=1000.):
+              irrad_ref=1000., *, xp):
     r'''
     Calculate cell temperature per the Sandia Array Performance Model.
 
@@ -155,13 +158,14 @@ def sapm_cell(poa_global, temp_air, wind_speed, a, b, deltaT,
     >>> sapm_cell(1000, 10, 0, **params)
     44.11703066106086
     '''
-    module_temperature = sapm_module(poa_global, temp_air, wind_speed,
-                                     a, b)
-    return sapm_cell_from_module(module_temperature, poa_global, deltaT,
-                                 irrad_ref)
+    module_temperature = sapm_module.core(poa_global, temp_air, wind_speed,
+                                          a, b, xp=xp)
+    return sapm_cell_from_module.core(module_temperature, poa_global, deltaT,
+                                      irrad_ref, xp=xp)
 
 
-def sapm_module(poa_global, temp_air, wind_speed, a, b):
+@_xa.labeled_io(arrays=('poa_global', 'temp_air', 'wind_speed', 'a', 'b'))
+def sapm_module(poa_global, temp_air, wind_speed, a, b, *, xp):
     r'''
     Calculate module back surface temperature per the Sandia Array
     Performance Model.
@@ -241,11 +245,13 @@ def sapm_module(poa_global, temp_air, wind_speed, a, b):
     sapm_cell
     sapm_cell_from_module
     '''
-    return poa_global * np.exp(a + b * wind_speed) + temp_air
+    return poa_global * xp.exp(a + b * wind_speed) + temp_air
 
 
+@_xa.labeled_io(arrays=('module_temperature', 'poa_global', 'deltaT',
+                        'irrad_ref'))
 def sapm_cell_from_module(module_temperature, poa_global, deltaT,
-                          irrad_ref=1000.):
+                          irrad_ref=1000., *, xp):
     r'''
     Calculate cell temperature from module temperature using the Sandia Array
     Performance Model.
@@ -431,7 +437,8 @@ def pvsyst_cell(poa_global, temp_air, wind_speed=1.0, u_c=29.0, u_v=0.0,
     return temp_air + temp_difference
 
 
-def faiman(poa_global, temp_air, wind_speed=1.0, u0=25.0, u1=6.84):
+@_xa.labeled_io(arrays=('poa_global', 'temp_air', 'wind_speed', 'u0', 'u1'))
+def faiman(poa_global, temp_air, wind_speed=1.0, u0=25.0, u1=6.84, *, xp):
     r'''
     Calculate cell or module temperature using the Faiman model.
 
@@ -495,12 +502,6 @@ def faiman(poa_global, temp_air, wind_speed=1.0, u0=25.0, u1=6.84):
     '''  # noQA: E501
 
     # Contributed by Anton Driesse (@adriesse), PV Performance Labs. Dec., 2019
-
-    # The following lines may seem odd since u0 & u1 are probably scalar,
-    # but it serves an indirect and easy way of allowing lists and
-    # tuples for the other function arguments.
-    u0 = np.asanyarray(u0)
-    u1 = np.asanyarray(u1)
 
     total_loss_factor = u0 + u1 * wind_speed
     heat_input = poa_global

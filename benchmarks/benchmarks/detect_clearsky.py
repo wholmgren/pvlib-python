@@ -8,7 +8,7 @@ import numpy as np
 
 
 class DetectClear:
-    params = [1, 10, 100]  # number of days
+    params = [1, 10, 100, 365]  # number of days
     param_names = ['ndays']
 
     def setup(self, ndays):
