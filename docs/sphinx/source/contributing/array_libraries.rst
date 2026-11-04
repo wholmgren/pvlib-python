@@ -66,11 +66,13 @@ Porting a function
    :ref:`array-libraries-time`.
 #. Call other supported functions through their cores:
    ``aoi_projection.core(..., xp=xp)``.
-#. Add the function to the test tables and benchmarks, see
+#. Add an entry for the function to ``SUPPORTED`` in
+   ``tests/_supported_functions.py``, and benchmarks, see
    :ref:`array-libraries-testing`.
 #. Add the function to the list of supported functions in
    ``docs/sphinx/source/user_guide/modeling_topics/array_libraries.rst``. If
-   only some of its models or methods are supported, say which.
+   only some of its models or methods are supported, say which. A test checks
+   that the list names exactly the functions in ``SUPPORTED``.
 
 
 .. _array-libraries-decorator:
@@ -168,6 +170,14 @@ does:
     # 0.0059 / zeta, but 0 where zeta == 0
     zeta_term = _xa.where_safe(zeta != 0, zeta, lambda z: 0.0059 / z, 0., xp)
 
+The same goes for a NaN that marks an excluded case, such as the NaN airmass
+of night. Masking it after the calculation, as ``np.fmax(x, 0)`` does, keeps
+it out of the value but not out of the gradient, which gets ``0 * nan``. A
+function that combines airmass with other inputs computes with a safe
+airmass instead, as :py:func:`~pvlib.clearsky.ineichen` and
+:py:func:`~pvlib.atmosphere.get_absolute_airmass` do. Otherwise one night
+time step makes the gradient of a whole day NaN.
+
 **Don't branch on array values.** ``if x > 0``, ``bool(x)``, ``float(x)`` and
 ``for v in x`` fail inside ``jax.jit`` and compute Dask arrays early. For an
 input check that raises, use ``_xa.known_any``, which skips the check when
@@ -230,22 +240,38 @@ converts them to float64 apart from the other arrays and raises
 Testing
 ~~~~~~~
 
-Add the function to two tables of test cases:
+Add an entry for the function to ``SUPPORTED`` in
+``tests/_supported_functions.py``. It gives the function's array arguments,
+with four values each, its other arguments, the name of a Series result,
+the parameters that also take datetimes, and those that must be 1-D series.
+Include values that reach the branches the function excludes, such as a
+zenith below the horizon or a NaN airmass. The entry runs the function
+through:
 
-- ``CASES`` in ``tests/test_input_types.py`` runs the function with Python
-  scalars, lists, NumPy arrays, masked arrays, named Series and xarray
-  DataArrays, and checks the type and values of each result. An entry gives
-  the function, its array arguments with four values each, its other
-  arguments, and the name of a Series result.
-- ``CASES`` in ``tests/test_array_api.py`` runs the function on
-  array-api-strict, PyTorch, JAX and Dask, and checks that it returns the
-  type it was given and the values NumPy gives. An entry is a function of
-  ``a``, which makes an array of the library from a list.
+- ``tests/test_input_types.py``: Python scalars, lists, NumPy arrays, masked
+  arrays, named Series and xarray DataArrays, checking the type and values
+  of each result;
+- ``tests/test_input_types_mixed.py``: calls that mix these types, and
+  datetimes, so that every pair of types for every pair of arguments
+  appears;
+- ``tests/test_array_api.py``: array-api-strict, PyTorch, JAX and Dask,
+  checking that the function returns the type it was given and the values
+  NumPy gives;
+- ``tests/test_array_api_gradients.py``: gradients with PyTorch and JAX,
+  which must be finite wherever the arguments are;
+- ``tests/test_array_api_vs_main.py``: the same calls with Python, NumPy and
+  pandas inputs must give what pvlib gave before the port. After adding an
+  entry, record those results again with ``tests/_make_array_api_golden.py``,
+  whose docstring says how.
+
+``tests/test_array_api.py`` also checks that every public function made with
+``labeled_io`` has an entry.
 
 Add tests of your own where the function needs them:
 
-- a function with ``where_safe``: that the gradient is finite where a branch
-  is excluded, like ``test_torch_haurwitz_gradient_finite_below_horizon``;
+- a function that chains others with ``where_safe`` in them: that the
+  gradient of the chain is finite and matches finite differences, like
+  ``test_torch_clear_sky_chain_through_night``;
 - a function with ``known_any``: that the check raises for eager JAX arrays
   and is skipped inside ``jax.jit``, like
   ``test_martin_ruiz_validates_eager_jax_but_not_traced``;

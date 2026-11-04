@@ -115,11 +115,20 @@ def ineichen(apparent_zenith, airmass_absolute, linke_turbidity,
     cg1 = 5.09e-05 * altitude + 0.868
     cg2 = 3.92e-05 * altitude + 0.0387
 
-    ghi = xp.exp(-cg2*airmass_absolute*(fh1 + fh2*(tl - 1)))
+    # A nan airmass marks the sun below the horizon. The terms that use it
+    # are nan there, as before, but computed from a safe airmass: a nan
+    # masked after the calculation stays out of the value but not out of
+    # the derivative (0 * nan), see _array_api.where_safe
+    sun_up = ~xp.isnan(airmass_absolute)
 
-    # https://github.com/pvlib/pvlib-python/issues/435
-    if perez_enhancement:
-        ghi = ghi * xp.exp(0.01*airmass_absolute**1.8)
+    def ghi_term(am):
+        term = xp.exp(-cg2*am*(fh1 + fh2*(tl - 1)))
+        # https://github.com/pvlib/pvlib-python/issues/435
+        if perez_enhancement:
+            term = term * xp.exp(0.01*am**1.8)
+        return term
+
+    ghi = _xa.where_safe(sun_up, airmass_absolute, ghi_term, xp.nan, xp)
 
     # use fmax to map airmass nans to 0s. multiply and divide by tl to
     # reinsert tl nans
@@ -129,12 +138,17 @@ def ineichen(apparent_zenith, airmass_absolute, linke_turbidity,
     # See https://github.com/pvlib/pvlib-python/pull/808
     b = 0.664 + 0.163/fh1
     # BncI = "normal beam clear sky radiation"
-    bnci = b * xp.exp(-0.09 * airmass_absolute * (tl - 1))
+    bnci = _xa.where_safe(sun_up, airmass_absolute,
+                          lambda am: b * xp.exp(-0.09 * am * (tl - 1)),
+                          xp.nan, xp)
     bnci = dni_extra * _fmax_zero(bnci, xp)
 
-    # "empirical correction" SE 73, 157 & SE 73, 312.
-    bnci_2 = ((1 - (0.1 - 0.2*xp.exp(-tl))/(0.1 + 0.882/fh1)) /
-              cos_zenith)
+    # "empirical correction" SE 73, 157 & SE 73, 312. Dividing by a zero
+    # cos_zenith (at night) gives inf, which fmax and fmin make 1e20, or 0
+    # for a negative numerator; either way bnci_2 is 0, since ghi is 0
+    correction = 1 - (0.1 - 0.2*xp.exp(-tl))/(0.1 + 0.882/fh1)
+    bnci_2 = _xa.where_safe(cos_zenith > 0, cos_zenith,
+                            lambda cz: correction / cz, xp.inf, xp)
     # np.fmin(np.fmax(bnci_2, 0), 1e20); no nans are left for fmin
     bnci_2 = ghi * xp.minimum(_fmax_zero(bnci_2, xp), 1e20)
 

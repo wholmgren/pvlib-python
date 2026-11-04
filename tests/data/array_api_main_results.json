@@ -4529,16 +4529,16 @@
    ],
    "type": "ndarray",
    "values": [
-    1413.981805,
+    1408.70305,
     1360.7897915626618,
-    1321.7686199481045,
-    1383.6362028955045
+    1322.6394140026784,
+    1387.5862659884644
    ]
   },
   "irradiance.get_extra_radiation[scalar]": {
    "dtype": "float64",
    "type": "scalar",
-   "values": 1413.981805
+   "values": 1408.70305
   },
   "irradiance.get_extra_radiation[series]": {
    "dtype": "float64",
@@ -4547,10 +4547,10 @@
    ],
    "type": "ndarray",
    "values": [
-    1413.981805,
+    1408.70305,
     1360.7897915626618,
-    1321.7686199481045,
-    1383.6362028955045
+    1322.6394140026784,
+    1387.5862659884644
    ]
   },
   "irradiance.get_ground_diffuse[list]": {
@@ -4590,6 +4590,45 @@
     5.276895681233013,
     6.698729810778064,
     2.924444461012775
+   ]
+  },
+  "irradiance.get_sky_diffuse[list]": {
+   "error": "TypeError",
+   "type": "error"
+  },
+  "irradiance.get_sky_diffuse[ndarray]": {
+   "dtype": "float64",
+   "shape": [
+    4
+   ],
+   "type": "ndarray",
+   "values": [
+    99.4391477668675,
+    131.1759172574242,
+    183.2909439149724,
+    72.62479730705968
+   ]
+  },
+  "irradiance.get_sky_diffuse[scalar]": {
+   "dtype": "float64",
+   "type": "scalar",
+   "values": 99.4391477668675
+  },
+  "irradiance.get_sky_diffuse[series]": {
+   "dtype": "float64",
+   "index": [
+    "2026-06-01 06:00:00-07:00",
+    "2026-06-01 09:00:00-07:00",
+    "2026-06-01 12:00:00-07:00",
+    "2026-06-01 15:00:00-07:00"
+   ],
+   "name": null,
+   "type": "Series",
+   "values": [
+    99.4391477668675,
+    131.1759172574242,
+    183.2909439149724,
+    72.62479730705968
    ]
   },
   "irradiance.get_total_irradiance[list]": {
@@ -4885,6 +4924,213 @@
     139.9519052838329,
     52.981333293569335
    ]
+  },
+  "irradiance.poa_components[list]": {
+   "error": "ValueError",
+   "type": "error"
+  },
+  "irradiance.poa_components[ndarray]": {
+   "items": {
+    "poa_diffuse": {
+     "dtype": "float64",
+     "shape": [
+      4
+     ],
+     "type": "ndarray",
+     "values": [
+      105.0,
+      126.0,
+      157.0,
+      68.0
+     ]
+    },
+    "poa_direct": {
+     "dtype": "float64",
+     "shape": [
+      4
+     ],
+     "type": "ndarray",
+     "values": [
+      787.8462024097664,
+      536.2311101832846,
+      171.0100716628344,
+      0.0
+     ]
+    },
+    "poa_global": {
+     "dtype": "float64",
+     "shape": [
+      4
+     ],
+     "type": "ndarray",
+     "values": [
+      892.8462024097664,
+      662.2311101832846,
+      328.01007166283443,
+      68.0
+     ]
+    },
+    "poa_ground_diffuse": {
+     "dtype": "float64",
+     "shape": [
+      4
+     ],
+     "type": "ndarray",
+     "values": [
+      5.0,
+      6.0,
+      7.0,
+      8.0
+     ]
+    },
+    "poa_sky_diffuse": {
+     "dtype": "float64",
+     "shape": [
+      4
+     ],
+     "type": "ndarray",
+     "values": [
+      100.0,
+      120.0,
+      150.0,
+      60.0
+     ]
+    }
+   },
+   "type": "dict"
+  },
+  "irradiance.poa_components[scalar]": {
+   "items": {
+    "poa_diffuse": {
+     "dtype": "float64",
+     "type": "scalar",
+     "values": 105.0
+    },
+    "poa_direct": {
+     "dtype": "float64",
+     "type": "scalar",
+     "values": 787.8462024097664
+    },
+    "poa_global": {
+     "dtype": "float64",
+     "type": "scalar",
+     "values": 892.8462024097664
+    },
+    "poa_ground_diffuse": {
+     "dtype": "float64",
+     "type": "scalar",
+     "values": 5.0
+    },
+    "poa_sky_diffuse": {
+     "dtype": "float64",
+     "type": "scalar",
+     "values": 100.0
+    }
+   },
+   "type": "dict"
+  },
+  "irradiance.poa_components[series]": {
+   "columns": {
+    "poa_diffuse": {
+     "dtype": "float64",
+     "index": [
+      "2026-06-01 06:00:00-07:00",
+      "2026-06-01 09:00:00-07:00",
+      "2026-06-01 12:00:00-07:00",
+      "2026-06-01 15:00:00-07:00"
+     ],
+     "name": "poa_diffuse",
+     "type": "Series",
+     "values": [
+      105.0,
+      126.0,
+      157.0,
+      68.0
+     ]
+    },
+    "poa_direct": {
+     "dtype": "float64",
+     "index": [
+      "2026-06-01 06:00:00-07:00",
+      "2026-06-01 09:00:00-07:00",
+      "2026-06-01 12:00:00-07:00",
+      "2026-06-01 15:00:00-07:00"
+     ],
+     "name": "poa_direct",
+     "type": "Series",
+     "values": [
+      787.8462024097664,
+      536.2311101832846,
+      171.0100716628344,
+      0.0
+     ]
+    },
+    "poa_global": {
+     "dtype": "float64",
+     "index": [
+      "2026-06-01 06:00:00-07:00",
+      "2026-06-01 09:00:00-07:00",
+      "2026-06-01 12:00:00-07:00",
+      "2026-06-01 15:00:00-07:00"
+     ],
+     "name": "poa_global",
+     "type": "Series",
+     "values": [
+      892.8462024097664,
+      662.2311101832846,
+      328.01007166283443,
+      68.0
+     ]
+    },
+    "poa_ground_diffuse": {
+     "dtype": "float64",
+     "index": [
+      "2026-06-01 06:00:00-07:00",
+      "2026-06-01 09:00:00-07:00",
+      "2026-06-01 12:00:00-07:00",
+      "2026-06-01 15:00:00-07:00"
+     ],
+     "name": "poa_ground_diffuse",
+     "type": "Series",
+     "values": [
+      5.0,
+      6.0,
+      7.0,
+      8.0
+     ]
+    },
+    "poa_sky_diffuse": {
+     "dtype": "float64",
+     "index": [
+      "2026-06-01 06:00:00-07:00",
+      "2026-06-01 09:00:00-07:00",
+      "2026-06-01 12:00:00-07:00",
+      "2026-06-01 15:00:00-07:00"
+     ],
+     "name": "poa_sky_diffuse",
+     "type": "Series",
+     "values": [
+      100.0,
+      120.0,
+      150.0,
+      60.0
+     ]
+    }
+   },
+   "index": [
+    "2026-06-01 06:00:00-07:00",
+    "2026-06-01 09:00:00-07:00",
+    "2026-06-01 12:00:00-07:00",
+    "2026-06-01 15:00:00-07:00"
+   ],
+   "order": [
+    "poa_global",
+    "poa_direct",
+    "poa_diffuse",
+    "poa_sky_diffuse",
+    "poa_ground_diffuse"
+   ],
+   "type": "DataFrame"
   },
   "isotropic[components]": {
    "columns": {
@@ -6731,6 +6977,84 @@
     37.40679995230414
    ]
   },
+  "temperature.sapm_cell_from_module[list]": {
+   "error": "TypeError",
+   "type": "error"
+  },
+  "temperature.sapm_cell_from_module[ndarray]": {
+   "dtype": "float64",
+   "shape": [
+    4
+   ],
+   "type": "ndarray",
+   "values": [
+    22.7,
+    27.1,
+    31.2,
+    35.3
+   ]
+  },
+  "temperature.sapm_cell_from_module[scalar]": {
+   "dtype": "float64",
+   "type": "scalar",
+   "values": 22.7
+  },
+  "temperature.sapm_cell_from_module[series]": {
+   "dtype": "float64",
+   "index": [
+    "2026-06-01 06:00:00-07:00",
+    "2026-06-01 09:00:00-07:00",
+    "2026-06-01 12:00:00-07:00",
+    "2026-06-01 15:00:00-07:00"
+   ],
+   "name": null,
+   "type": "Series",
+   "values": [
+    22.7,
+    27.1,
+    31.2,
+    35.3
+   ]
+  },
+  "temperature.sapm_module[list]": {
+   "error": "TypeError",
+   "type": "error"
+  },
+  "temperature.sapm_module[ndarray]": {
+   "dtype": "float64",
+   "shape": [
+    4
+   ],
+   "type": "ndarray",
+   "values": [
+    43.74554094868172,
+    42.13426629015687,
+    39.08354511069253,
+    37.106799952304144
+   ]
+  },
+  "temperature.sapm_module[scalar]": {
+   "dtype": "float64",
+   "type": "scalar",
+   "values": 43.74554094868172
+  },
+  "temperature.sapm_module[series]": {
+   "dtype": "float64",
+   "index": [
+    "2026-06-01 06:00:00-07:00",
+    "2026-06-01 09:00:00-07:00",
+    "2026-06-01 12:00:00-07:00",
+    "2026-06-01 15:00:00-07:00"
+   ],
+   "name": null,
+   "type": "Series",
+   "values": [
+    43.74554094868172,
+    42.13426629015687,
+    39.08354511069253,
+    37.106799952304144
+   ]
+  },
   "tools.acosd[list]": {
    "dtype": "float64",
    "shape": [
@@ -7018,6 +7342,22 @@
     1.7320508075688767,
     5.6712818196177075
    ]
+  },
+  "tools.unix_to_doy[list]": {
+   "error": "AttributeError",
+   "type": "error"
+  },
+  "tools.unix_to_doy[ndarray]": {
+   "error": "AttributeError",
+   "type": "error"
+  },
+  "tools.unix_to_doy[scalar]": {
+   "error": "AttributeError",
+   "type": "error"
+  },
+  "tools.unix_to_doy[series]": {
+   "error": "AttributeError",
+   "type": "error"
   }
  },
  "meta": {

@@ -29,16 +29,19 @@ import pandas as pd
 from pvlib import (atmosphere, clearsky, iam, inverter, irradiance, location,
                    pvsystem, soiling, solarposition, temperature)
 
-from .test_input_types import (CASES as TYPE_CASES, INDEX, ZEN, AZI, TILT,
-                               SAZI, DNI, GHI, DHI, TEMP, WIND, _convert)
+from ._supported_functions import (SUPPORTED, INDEX, ZEN, AZI, TILT, SAZI,
+                                   DNI, GHI, DHI, TEMP, WIND, function)
+from .test_input_types import _convert
 
 Case = collections.namedtuple('Case', 'call policy requires',
                               defaults=('match', ()))
 
-# input kinds for the functions of test_input_types. xarray is left out,
-# since pvlib didn't support it before the port, and so are masked arrays,
-# which some functions got wrong then (inverter.pvwatts gave NaN at zero
-# power); test_input_types compares masked arrays with NumPy arrays
+# input kinds for the supported functions. xarray is left out, since pvlib
+# didn't support it before the port, and so are masked arrays, which some
+# functions got wrong then (inverter.pvwatts gave NaN at zero power);
+# test_input_types compares masked arrays with NumPy arrays. Functions that
+# take numbers as Unix seconds are left out too: before the port, numbers
+# were nanoseconds. SPA_CASES and HSU_CASES compare them with datetimes
 KINDS = ['scalar', 'list', 'ndarray', 'series']
 
 # documented changes from before the port, by case: the values must match,
@@ -56,9 +59,10 @@ def _series(values, index=INDEX, name=None):
 
 
 def _type_case(name, kind):
-    func, arrays, params, _ = TYPE_CASES[name]
-    kwargs = {k: _convert(kind, k, v) for k, v in arrays.items()}
-    return func(**kwargs, **params)
+    # functions added by the port raise AttributeError before it
+    entry = SUPPORTED[name]
+    kwargs = {k: _convert(kind, k, v) for k, v in entry.arrays.items()}
+    return function(name)(**kwargs, **entry.params)
 
 
 # --- solar position ---------------------------------------------------------
@@ -293,7 +297,9 @@ REJECT_CASES = {
 
 def _build():
     cases = {}
-    for name in TYPE_CASES:
+    for name, entry in SUPPORTED.items():
+        if 'unix' in entry.time.values():
+            continue
         for kind in KINDS:
             cases[f'{name}[{kind}]'] = Case(
                 functools.partial(_type_case, name, kind))

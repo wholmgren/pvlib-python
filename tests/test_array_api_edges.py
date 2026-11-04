@@ -14,7 +14,7 @@ from pvlib import irradiance, pvsystem, soiling, solarposition, temperature
 from pvlib import tools
 
 from .conftest import requires_numba
-from .test_input_types import GHI, INDEX, TILT, ZEN
+from ._supported_functions import GHI, INDEX, TILT, ZEN
 
 LAT, LON = 32.2, -110.9
 TIMES = pd.date_range('2026-06-01', periods=48, freq='1h', tz='UTC')

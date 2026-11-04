@@ -29,7 +29,8 @@ So far these functions accept arrays from other libraries:
 - irradiance: :py:func:`~pvlib.irradiance.aoi`,
   :py:func:`~pvlib.irradiance.aoi_projection`,
   :py:func:`~pvlib.irradiance.beam_component`,
-  :py:func:`~pvlib.irradiance.get_total_irradiance` with the
+  :py:func:`~pvlib.irradiance.get_total_irradiance` and
+  :py:func:`~pvlib.irradiance.get_sky_diffuse` with the
   ``'isotropic'`` and ``'haydavies'`` models,
   :py:func:`~pvlib.irradiance.poa_components`,
   :py:func:`~pvlib.irradiance.get_ground_diffuse`,
@@ -50,6 +51,10 @@ So far these functions accept arrays from other libraries:
 - power: :py:func:`~pvlib.pvsystem.pvwatts_dc`,
   :py:func:`~pvlib.inverter.pvwatts`
 - soiling: :py:func:`~pvlib.soiling.hsu`
+- tools: :py:func:`~pvlib.tools.cosd`, :py:func:`~pvlib.tools.sind`,
+  :py:func:`~pvlib.tools.tand`, :py:func:`~pvlib.tools.asind`,
+  :py:func:`~pvlib.tools.acosd`, :py:func:`~pvlib.tools.atand`,
+  :py:func:`~pvlib.tools.unix_to_doy`
 
 Other functions take NumPy and pandas only. Given arrays from another
 library, they may fail with an unclear error. To add a function to this
@@ -184,7 +189,9 @@ Gradients are zero where a model is flat: where
 or below the horizon. They change abruptly at kinks such as the clearness
 index thresholds in :py:func:`~pvlib.irradiance.erbs`, and are zero with
 respect to thresholds such as ``cleaning_threshold`` in
-:py:func:`~pvlib.soiling.hsu`.
+:py:func:`~pvlib.soiling.hsu`. Night time steps can stay in: the supported
+functions keep the NaN airmass of night out of the gradient, which would
+otherwise make the gradient of the whole day NaN.
 
 Input checks that need values, such as the check of ``a_r`` in
 :py:func:`~pvlib.iam.martin_ruiz`, are skipped inside ``jax.jit`` and for

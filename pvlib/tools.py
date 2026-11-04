@@ -628,7 +628,9 @@ def _degrees_to_index(degrees, coordinate):
         else:
             raise err
     # If the index wasn't set to outputmax or 0, round it and cast it as an
-    # integer so it can be used in integer-based indexing.
+    # integer so it can be used in integer-based indexing. np.around rounds
+    # halves to even, so degrees on the edge between two cells (a multiple
+    # of 1/12 degree for pvlib's maps) give the even-numbered cell.
     else:
         index = int(np.around(index))
 

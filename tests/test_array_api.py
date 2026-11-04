@@ -12,8 +12,10 @@ import pytest
 from numpy.testing import assert_allclose
 
 import pvlib
-from pvlib import (atmosphere, clearsky, iam, inverter, irradiance,
-                   pvsystem, temperature, tools)
+from pvlib import (clearsky, iam, inverter, irradiance, pvsystem,
+                   temperature)
+
+from ._supported_functions import SUPPORTED, function, qualified_name
 
 
 @pytest.fixture(autouse=True)
@@ -77,45 +79,24 @@ GHI = [800., 600., 400., 200., 50., 0.]
 DHI = [100., 120., 150., 100., 40., 0.]
 TAIR = [25., 30., 15., 5., 35., 20.]
 WIND = [1., 2., 3., 4., 5., 0.]
-AIRMASS = [1.015, 1.155, 1.556, 2.92, 26.3, np.nan]
-TURBIDITY = [2., 2.5, 3., 3.5, 4., 4.5]
-
-CASES = {
-    'cosd': lambda a: tools.cosd(a(ZEN)),
-    'acosd': lambda a: tools.acosd(a([0., 0.5, 1.])),
-    'aoi': lambda a: irradiance.aoi(30, 180, a(ZEN), a(AZI)),
-    'beam_component': lambda a: irradiance.beam_component(
-        30, 180, a(ZEN), a(AZI), a(DNI)),
-    'haydavies': lambda a: irradiance.haydavies(
-        30, 180, a(DHI), a(DNI), 1360., a(ZEN), a(AZI)),
-    'get_total_irradiance': lambda a: irradiance.get_total_irradiance(
-        30, 180, a(ZEN), a(AZI), a(DNI), a(GHI), a(DHI))['poa_global'],
-    'get_relative_airmass': lambda a: atmosphere.get_relative_airmass(
-        a(ZEN)),
-    'haurwitz': lambda a: clearsky.haurwitz(a(ZEN))['ghi'],
-    'ineichen': lambda a: clearsky.ineichen(
-        a(ZEN), a(AIRMASS), a(TURBIDITY), altitude=1500.)['dni'],
-    'get_absolute_airmass': lambda a: atmosphere.get_absolute_airmass(
-        a(AIRMASS), 90000.),
-    'alt2pres': lambda a: atmosphere.alt2pres(a([0., 500., 1500., 4500.])),
-    'ashrae': lambda a: iam.ashrae(a(ZEN)),
-    'martin_ruiz': lambda a: iam.martin_ruiz(a(ZEN)),
-    'sapm_cell': lambda a: temperature.sapm_cell(
-        a(GHI), a(TAIR), a(WIND), -3.56, -0.075, 3),
-    'faiman': lambda a: temperature.faiman(a(GHI), a(TAIR), a(WIND)),
-    'pvwatts_dc': lambda a: pvsystem.pvwatts_dc(
-        a(GHI), a(TAIR), 250., -0.004, k=0.01),
-    'inverter.pvwatts': lambda a: inverter.pvwatts(a(GHI) * 0.25, 120.),
-}
 
 
-@pytest.mark.parametrize('case', list(CASES))
+@pytest.mark.parametrize('case', list(SUPPORTED))
 def test_type_in_type_out(backend, case):
+    # every supported function, with the inputs of its entry
     name, mod, a = backend
-    expected = CASES[case](np.asarray)
-    out = CASES[case](a)
-    assert isinstance(out, type(a([1.])))
-    assert_allclose(_to_numpy(out), expected, equal_nan=True)
+    entry, func = SUPPORTED[case], function(case)
+    expected = func(**{k: np.asarray(v) for k, v in entry.arrays.items()},
+                    **entry.params)
+    out = func(**{k: a(v) for k, v in entry.arrays.items()}, **entry.params)
+    if isinstance(expected, dict):
+        assert out.keys() == expected.keys()
+        pairs = [(out[k], expected[k]) for k in expected]
+    else:
+        pairs = [(out, expected)]
+    for actual, values in pairs:
+        assert isinstance(actual, type(a([1.])))
+        assert_allclose(_to_numpy(actual), values, equal_nan=True)
 
 
 def test_dask_stays_lazy():
@@ -366,3 +347,41 @@ def test_spa_formula_numpy_names_have_array_api_equivalents():
                     and node.value.id == 'np'):
                 assert callable(getattr(names, node.attr)), (formula,
                                                              node.attr)
+
+
+def _labeled_io_functions():
+    """The public pvlib functions made with labeled_io."""
+    import importlib
+    import inspect
+    import pkgutil
+    found = set()
+    for info in pkgutil.walk_packages(pvlib.__path__, 'pvlib.'):
+        try:
+            module = importlib.import_module(info.name)
+        except ImportError:  # optional dependencies
+            continue
+        for name, obj in vars(module).items():
+            if (inspect.isfunction(obj) and hasattr(obj, 'core')
+                    and not name.startswith('_')
+                    and obj.__module__ == module.__name__):
+                found.add(f'{module.__name__}.{name}')
+    return found
+
+
+def test_every_labeled_io_function_has_an_entry():
+    # an entry runs the function through the array library tests
+    missing = _labeled_io_functions() - {qualified_name(k) for k in SUPPORTED}
+    assert not missing, f'add entries to _supported_functions: {missing}'
+
+
+def test_user_guide_lists_the_supported_functions():
+    import pathlib
+    import re
+    guide = (pathlib.Path(__file__).parents[1] / 'docs' / 'sphinx' / 'source'
+             / 'user_guide' / 'modeling_topics' / 'array_libraries.rst')
+    if not guide.exists():
+        pytest.skip('the docs are not here')
+    section = guide.read_text().split('\nSupported functions\n')[1]
+    section = section.split('\nOther functions take')[0]
+    listed = set(re.findall(r':py:func:`~?(pvlib\.[\w.]+)`', section))
+    assert listed == {qualified_name(k) for k in SUPPORTED}

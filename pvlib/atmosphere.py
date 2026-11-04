@@ -129,7 +129,13 @@ def get_absolute_airmass(airmass_relative, pressure=101325., *, xp):
        data," Solar Energy, vol. 51, pp. 121-138, 1993.
     '''
 
-    airmass_absolute = airmass_relative * pressure / 101325.
+    # a nan airmass marks the sun below the horizon. Multiplying it by
+    # pressure would make the derivative with respect to pressure nan
+    # there (0 * nan) even where the nan is masked later, so it is kept out
+    # of the calculation; see _array_api.where_safe
+    airmass_absolute = _xa.where_safe(
+        ~xp.isnan(airmass_relative), airmass_relative,
+        lambda am: am * pressure / 101325., xp.nan, xp)
 
     return airmass_absolute
 

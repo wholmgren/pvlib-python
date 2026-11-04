@@ -15,9 +15,8 @@ import pandas as pd
 import pytest
 from numpy.testing import assert_allclose
 
-from pvlib import irradiance, soiling, solarposition
-
-from .test_input_types import CASES as TYPE_CASES, INDEX, MASKED, _convert
+from ._supported_functions import INDEX, SUPPORTED, function
+from .test_input_types import MASKED, _convert
 
 NUM = ['scalar', 'list', 'ndarray', 'masked', 'series', 'xarray']
 DATETIMES = ['dtindex', 'dt_series', 'dt64', 'timestamp', 'dt_xarray']
@@ -41,39 +40,26 @@ TIME_VALUES = {
 }
 TIME_VALUES['unix1d'] = TIME_VALUES['unix']
 
+# spa_python returns a DataFrame for any datetime-like time
+PANDAS_TOO = {'solarposition.spa_python': {'dt64'}}
+
+
+def _category(entry, param):
+    one_d = '1d' if param in entry.one_d else ''
+    return entry.time.get(param, 'num') + one_d
+
+
+# the supported functions with more than one array argument
 # name: (function, {parameter: (values, category)}, other arguments,
 #        kinds that give a pandas result besides PANDAS)
+# Time parameters take their values from INDEX, as the datetime kinds do.
 FUNCTIONS = {
-    name: (func, {k: (v, 'num') for k, v in arrays.items()}, params, set())
-    for name, (func, arrays, params, _) in TYPE_CASES.items()
-    if len(arrays) > 1 and name != 'irradiance.erbs'
+    name: (function(name),
+           {p: (None if p in entry.time else v, _category(entry, p))
+            for p, v in entry.arrays.items()},
+           entry.params, PANDAS_TOO.get(name, set()))
+    for name, entry in SUPPORTED.items() if len(entry.arrays) > 1
 }
-FUNCTIONS.update({
-    'irradiance.erbs': (
-        irradiance.erbs,
-        {'ghi': ([900., 700., 400., 100.], 'num'),
-         'zenith': ([20., 40., 60., 80.], 'num'),
-         'datetime_or_doy': (None, 'doy')}, {}, set()),
-    'irradiance.get_extra_radiation': (
-        irradiance.get_extra_radiation,
-        {'datetime_or_doy': (None, 'doy'),
-         'solar_constant': ([1361., 1366.1, 1367., 1370.], 'num')}, {},
-        set()),
-    # spa_python returns a DataFrame for any datetime-like time
-    'solarposition.spa_python': (
-        solarposition.spa_python,
-        {'time': (None, 'unix'), 'latitude': ([30., 32., 34., 36.], 'num'),
-         'longitude': ([-110., -111., -112., -113.], 'num')}, {},
-        {'dt64'}),
-    'soiling.hsu': (
-        soiling.hsu,
-        {'rainfall': ([0., 1.6, 0., 1.2], 'num1d'),
-         'times': (None, 'unix1d'),
-         'surface_tilt': ([10., 20., 30., 40.], 'num'),
-         'pm2_5': ([1e-2, 1.5e-2, 2e-2, 2.5e-2], 'num'),
-         'pm10': ([2e-2, 2.5e-2, 3e-2, 3.5e-2], 'num')},
-        {'cleaning_threshold': 1.0}, set()),
-})
 
 
 def _pairwise(kinds):

@@ -42,10 +42,14 @@ SOUTH, NORTH, WEST, EAST = -30, -18, -75, -64
 
 
 def read_map(file, name):
+    # Row i spans latitudes 90 - i/12 to 90 - (i + 1)/12, so its center is
+    # at 90 - (i + 0.5)/12; column j's center is at -180 + (j + 0.5)/12.
+    # Bounds in whole degrees fall on cell edges, so the slices take whole
+    # cells, from the north and west bounds up to the south and east ones.
     rows = slice((90 - NORTH) * 12, (90 - SOUTH) * 12)
     cols = slice((WEST + 180) * 12, (EAST + 180) * 12)
     with h5py.File(DATA / file) as f:
-        values = f[name][rows, cols]
+        values = f[name][rows, cols]  # reads only these cells
     coords = {'lat': 90 - (np.arange(rows.start, rows.stop) + 0.5) / 12,
               'lon': -180 + (np.arange(cols.start, cols.stop) + 0.5) / 12}
     if values.ndim == 3:  # turbidity has a value for each month
@@ -58,7 +62,9 @@ def read_map(file, name):
 # 28 m steps from -450 m, with 255 where there is no data, here over the
 # ocean, which ``lookup_altitude`` takes as sea level.
 
+# uint8, turbidity times 20, so in steps of 0.05
 linke_turbidity = read_map('LinkeTurbidities.h5', 'LinkeTurbidity') / 20
+# uint8, 28 m * value - 450 m, from -450 m to 6,662 m, and 255 for no data
 stored = read_map('Altitude.h5', 'Altitude')
 altitude = xr.where(stored == 255, 0., stored * 28. - 450.)
 
@@ -82,6 +88,9 @@ def annual_clear_sky(altitude, linke_turbidity):
     zenith = position['apparent_zenith']
     airmass = atmosphere.get_absolute_airmass(
         atmosphere.get_relative_airmass(zenith), pressure)
+    # The 12 turbidity values are monthly averages, January first. Each day
+    # takes its month's value, as lookup_linke_turbidity does with
+    # interp_turbidity=False; by default it interpolates between them
     clear = clearsky.ineichen(
         zenith, airmass, linke_turbidity.sel(month=time.dt.month),
         altitude=altitude, dni_extra=irradiance.get_extra_radiation(time))
@@ -93,6 +102,8 @@ def annual_clear_sky(altitude, linke_turbidity):
 # For the DNI map, cells of 1/4°, the averages of 3 by 3 cells, keep the
 # calculation small: 288 times in each of 2,112 cells.
 
+# The model isn't linear, so averaging its inputs differs a little from
+# averaging its results at the finer cells; for a map that's fine
 grid = annual_clear_sky(altitude.coarsen(lat=3, lon=3).mean(),
                         linke_turbidity.coarsen(lat=3, lon=3).mean())
 
@@ -100,7 +111,12 @@ grid = annual_clear_sky(altitude.coarsen(lat=3, lon=3).mean(),
 # Clear-sky DNI follows altitude and turbidity. The plateau gets up to about
 # 4,900 kWh/m² a year, the coast and the ocean around 3,000.
 
-TRANSECT = -23.04  # latitude of the line below
+# Latitude of the line below, near the center of a cell. A latitude or
+# longitude on the edge between two cells (a multiple of 1/12°, such as
+# 67.75° W) is ambiguous: pvlib's lookups round it to the even-numbered cell,
+# as numpy rounds halves to even, while xarray's sel(method='nearest') may
+# take the other one
+TRANSECT = -23.04
 
 fig, axes = plt.subplots(1, 3, figsize=(10, 5), sharey=True)
 panels = [
