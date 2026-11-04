@@ -15,8 +15,10 @@ from pvlib import _array_api as _xa, atmosphere, tools
 from pvlib.tools import _degrees_to_index
 
 
+@_xa.labeled_io(arrays=('apparent_zenith', 'airmass_absolute',
+                        'linke_turbidity', 'altitude', 'dni_extra'))
 def ineichen(apparent_zenith, airmass_absolute, linke_turbidity,
-             altitude=0, dni_extra=1364., perez_enhancement=False):
+             altitude=0, dni_extra=1364., perez_enhancement=False, *, xp):
     '''
     Determine clear-sky GHI, DNI, and DHI using the Ineichen/Perez model.
 
@@ -55,9 +57,10 @@ def ineichen(apparent_zenith, airmass_absolute, linke_turbidity,
 
     Returns
     -------
-    clearsky : DataFrame (if Series input) or dict of arrays
+    clearsky : DataFrame, Dataset or dict of arrays
         Contains the columns/keys ``'dhi', 'dni', 'ghi'``, with the same
-        unit as the input parameter ``dni_extra``.
+        unit as the input parameter ``dni_extra``. A DataFrame for pandas
+        input and a Dataset for xarray input.
 
     See also
     --------
@@ -97,43 +100,45 @@ def ineichen(apparent_zenith, airmass_absolute, linke_turbidity,
     # The NaN handling is a little subtle. The AM input is likely to
     # have NaNs that we'll want to map to 0s in the output. However, we
     # want NaNs in other inputs to propagate through to the output. This
-    # is accomplished by judicious use and placement of np.maximum,
-    # np.minimum, and np.fmax
+    # is accomplished by judicious use and placement of maximum,
+    # minimum, and fmax. The array API standard has no fmax:
+    # _fmax_zero(x) is np.fmax(x, 0)
 
     # use max so that nighttime values will result in 0s instead of
     # negatives. propagates nans.
-    cos_zenith = np.maximum(tools.cosd(apparent_zenith), 0)
+    cos_zenith = xp.maximum(tools._cosd(apparent_zenith, xp), 0.)
 
     tl = linke_turbidity
 
-    fh1 = np.exp(-altitude/8000.)
-    fh2 = np.exp(-altitude/1250.)
+    fh1 = xp.exp(-altitude/8000.)
+    fh2 = xp.exp(-altitude/1250.)
     cg1 = 5.09e-05 * altitude + 0.868
     cg2 = 3.92e-05 * altitude + 0.0387
 
-    ghi = np.exp(-cg2*airmass_absolute*(fh1 + fh2*(tl - 1)))
+    ghi = xp.exp(-cg2*airmass_absolute*(fh1 + fh2*(tl - 1)))
 
     # https://github.com/pvlib/pvlib-python/issues/435
     if perez_enhancement:
-        ghi *= np.exp(0.01*airmass_absolute**1.8)
+        ghi = ghi * xp.exp(0.01*airmass_absolute**1.8)
 
     # use fmax to map airmass nans to 0s. multiply and divide by tl to
     # reinsert tl nans
-    ghi = cg1 * dni_extra * cos_zenith * tl / tl * np.fmax(ghi, 0)
+    ghi = cg1 * dni_extra * cos_zenith * tl / tl * _fmax_zero(ghi, xp)
 
     # From [1] (Following [2] leads to 0.664 + 0.16268 / fh1)
     # See https://github.com/pvlib/pvlib-python/pull/808
     b = 0.664 + 0.163/fh1
     # BncI = "normal beam clear sky radiation"
-    bnci = b * np.exp(-0.09 * airmass_absolute * (tl - 1))
-    bnci = dni_extra * np.fmax(bnci, 0)
+    bnci = b * xp.exp(-0.09 * airmass_absolute * (tl - 1))
+    bnci = dni_extra * _fmax_zero(bnci, xp)
 
     # "empirical correction" SE 73, 157 & SE 73, 312.
-    bnci_2 = ((1 - (0.1 - 0.2*np.exp(-tl))/(0.1 + 0.882/fh1)) /
+    bnci_2 = ((1 - (0.1 - 0.2*xp.exp(-tl))/(0.1 + 0.882/fh1)) /
               cos_zenith)
-    bnci_2 = ghi * np.fmin(np.fmax(bnci_2, 0), 1e20)
+    # np.fmin(np.fmax(bnci_2, 0), 1e20); no nans are left for fmin
+    bnci_2 = ghi * xp.minimum(_fmax_zero(bnci_2, xp), 1e20)
 
-    dni = np.minimum(bnci, bnci_2)
+    dni = xp.minimum(bnci, bnci_2)
 
     dhi = ghi - dni*cos_zenith
 
@@ -142,10 +147,12 @@ def ineichen(apparent_zenith, airmass_absolute, linke_turbidity,
     irrads['dni'] = dni
     irrads['dhi'] = dhi
 
-    if isinstance(dni, pd.Series):
-        irrads = pd.DataFrame.from_dict(irrads)
-
     return irrads
+
+
+def _fmax_zero(x, xp):
+    # np.fmax(x, 0): x where it is positive, else 0, also where it is nan
+    return xp.where(x > 0, x, 0.)
 
 
 def lookup_linke_turbidity(time, latitude, longitude, filepath=None,

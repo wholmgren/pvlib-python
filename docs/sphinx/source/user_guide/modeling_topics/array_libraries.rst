@@ -24,7 +24,8 @@ Supported functions
 So far these functions accept arrays from other libraries:
 
 - solar position: :py:func:`~pvlib.solarposition.spa_python`
-- clear sky: :py:func:`~pvlib.clearsky.haurwitz`
+- clear sky: :py:func:`~pvlib.clearsky.haurwitz`,
+  :py:func:`~pvlib.clearsky.ineichen`
 - irradiance: :py:func:`~pvlib.irradiance.aoi`,
   :py:func:`~pvlib.irradiance.aoi_projection`,
   :py:func:`~pvlib.irradiance.beam_component`,
@@ -37,7 +38,9 @@ So far these functions accept arrays from other libraries:
   :py:func:`~pvlib.irradiance.get_extra_radiation` with the ``'asce'`` and
   ``'spencer'`` methods, :py:func:`~pvlib.irradiance.clearness_index`,
   :py:func:`~pvlib.irradiance.erbs`
-- airmass: :py:func:`~pvlib.atmosphere.get_relative_airmass`
+- atmosphere: :py:func:`~pvlib.atmosphere.get_relative_airmass`,
+  :py:func:`~pvlib.atmosphere.get_absolute_airmass`,
+  :py:func:`~pvlib.atmosphere.alt2pres`
 - incidence angle modifiers: :py:func:`~pvlib.iam.ashrae`,
   :py:func:`~pvlib.iam.martin_ruiz`
 - temperature: :py:func:`~pvlib.temperature.sapm_cell`,

@@ -104,6 +104,20 @@ CASES = {
     'atmosphere.get_relative_airmass': (
         atmosphere.get_relative_airmass, {'zenith': [20., 60., 89., 95.]},
         {}, None),
+    'atmosphere.get_absolute_airmass': (
+        atmosphere.get_absolute_airmass,
+        {'airmass_relative': [1.06, 2., 26., np.nan],
+         'pressure': [101325., 95000., 90000., 60000.]}, {}, None),
+    'atmosphere.alt2pres': (
+        atmosphere.alt2pres, {'altitude': [0., 500., 1500., 4500.]}, {},
+        KEEP),
+    # nan airmass, as at night, gives 0
+    'clearsky.ineichen': (
+        clearsky.ineichen,
+        {'apparent_zenith': [20., 60., 89., 95.],
+         'airmass_absolute': [1.06, 2., 26., np.nan],
+         'linke_turbidity': [2., 3., 4., 5.],
+         'altitude': [0., 500., 1500., 4500.]}, {'dni_extra': 1360.}, None),
 }
 
 KINDS = ['scalar', 'list', 'ndarray', 'masked', 'series', 'xarray']

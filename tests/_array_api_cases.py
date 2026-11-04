@@ -26,8 +26,8 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from pvlib import (atmosphere, iam, inverter, irradiance, pvsystem, soiling,
-                   solarposition, temperature)
+from pvlib import (atmosphere, clearsky, iam, inverter, irradiance, location,
+                   pvsystem, soiling, solarposition, temperature)
 
 from .test_input_types import (CASES as TYPE_CASES, INDEX, ZEN, AZI, TILT,
                                SAZI, DNI, GHI, DHI, TEMP, WIND, _convert)
@@ -256,6 +256,14 @@ OTHER_CASES = {
     'faiman[u0 array]': lambda: temperature.faiman(
         np.array(GHI), np.array(TEMP), np.array(WIND),
         u0=np.array([20., 25., 30., 35.])),
+    'ineichen[perez_enhancement]': lambda: clearsky.ineichen(
+        _series(ZEN), _series([1.06, 1.3, 2., 5.6]), 3., altitude=1000.,
+        perez_enhancement=True),
+    'ineichen[nan turbidity]': lambda: clearsky.ineichen(
+        np.array(ZEN), np.array([1.06, 1.3, 2., 5.6]),
+        np.array([2., np.nan, 3., 4.])),
+    'Location.get_clearsky[ineichen]': lambda: location.Location(
+        LAT, LON, altitude=700.).get_clearsky(HOURS[:24]),
 }
 
 # --- inputs that must not be accepted silently ------------------------------

@@ -54,7 +54,8 @@ def pres2alt(pressure):
     return alt
 
 
-def alt2pres(altitude):
+@_xa.labeled_io(arrays=('altitude',))
+def alt2pres(altitude, *, xp):
     '''
     Determine site pressure from altitude.
 
@@ -94,7 +95,8 @@ def alt2pres(altitude):
     return press
 
 
-def get_absolute_airmass(airmass_relative, pressure=101325.):
+@_xa.labeled_io(arrays=('airmass_relative', 'pressure'))
+def get_absolute_airmass(airmass_relative, pressure=101325., *, xp):
     r'''
     Determine absolute (pressure-adjusted) airmass from relative
     airmass and pressure.

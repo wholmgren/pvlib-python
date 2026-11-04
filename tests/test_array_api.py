@@ -77,6 +77,8 @@ GHI = [800., 600., 400., 200., 50., 0.]
 DHI = [100., 120., 150., 100., 40., 0.]
 TAIR = [25., 30., 15., 5., 35., 20.]
 WIND = [1., 2., 3., 4., 5., 0.]
+AIRMASS = [1.015, 1.155, 1.556, 2.92, 26.3, np.nan]
+TURBIDITY = [2., 2.5, 3., 3.5, 4., 4.5]
 
 CASES = {
     'cosd': lambda a: tools.cosd(a(ZEN)),
@@ -91,6 +93,11 @@ CASES = {
     'get_relative_airmass': lambda a: atmosphere.get_relative_airmass(
         a(ZEN)),
     'haurwitz': lambda a: clearsky.haurwitz(a(ZEN))['ghi'],
+    'ineichen': lambda a: clearsky.ineichen(
+        a(ZEN), a(AIRMASS), a(TURBIDITY), altitude=1500.)['dni'],
+    'get_absolute_airmass': lambda a: atmosphere.get_absolute_airmass(
+        a(AIRMASS), 90000.),
+    'alt2pres': lambda a: atmosphere.alt2pres(a([0., 500., 1500., 4500.])),
     'ashrae': lambda a: iam.ashrae(a(ZEN)),
     'martin_ruiz': lambda a: iam.martin_ruiz(a(ZEN)),
     'sapm_cell': lambda a: temperature.sapm_cell(
