@@ -88,7 +88,9 @@ the others. Dask arrays stay lazy: the result is computed when you call
 
 pandas inputs must have equal indexes. pvlib matches their values by
 position and doesn't align them as pandas arithmetic does, so Series with
-different indexes raise ``ValueError``; reindex data with gaps first.
+different indexes raise ``ValueError``; reindex data with gaps first. The
+same instants in different time zones are equal, and the result has the
+index of the first pandas input.
 Strings and datetimes given where numbers are expected raise ``TypeError``.
 
 xarray

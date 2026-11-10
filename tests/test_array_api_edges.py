@@ -109,8 +109,10 @@ MISMATCHED = {
     'shifted': (INDEX + pd.Timedelta('3h'), TILT),
     'reordered': (INDEX[[1, 0, 2, 3]], TILT),
     'subset': (INDEX[:3], TILT[:3]),
-    # pandas aligns these by instant, but the indexes differ
-    'other time zone': (INDEX.tz_convert('UTC'), TILT),
+    # the same wall-clock times, but other instants
+    'other time zone, same clock': (
+        INDEX.tz_localize(None).tz_localize('UTC'), TILT),
+    'naive': (INDEX.tz_localize(None), TILT),
 }
 
 
@@ -138,4 +140,21 @@ def test_series_with_equal_indexes_work():
     # different DataFrames
     out = irradiance.aoi(pd.Series(TILT, INDEX.copy()), 180.,
                          pd.Series(ZEN, INDEX.copy()), 180.)
+    assert out.index.equals(INDEX)
+
+
+def test_series_with_the_same_instants_in_two_time_zones_work():
+    # as pandas arithmetic aligns them; the result has the first's index
+    utc = INDEX.tz_convert('UTC')
+    expected = irradiance.aoi(pd.Series(TILT, INDEX), 180.,
+                              pd.Series(ZEN, INDEX), 180.)
+    out = irradiance.aoi(pd.Series(TILT, INDEX), 180., pd.Series(ZEN, utc),
+                         180.)
+    pd.testing.assert_series_equal(out, expected)
+    out = irradiance.aoi(pd.Series(TILT, utc), 180., pd.Series(ZEN, INDEX),
+                         180.)
+    assert out.index.equals(utc) and out.index.tz == utc.tz
+    np.testing.assert_array_equal(out.to_numpy(), expected.to_numpy())
+    # a DatetimeIndex argument too
+    out = irradiance.erbs(pd.Series(GHI, INDEX), pd.Series(ZEN, INDEX), utc)
     assert out.index.equals(INDEX)

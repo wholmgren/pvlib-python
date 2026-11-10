@@ -159,7 +159,10 @@ The cost is that Series with different indexes can't be aligned. With pandas
 arithmetic, a mismatch gave NaN. Matched by position, the values of
 different times would be paired without an error, so the boundary raises
 ``ValueError`` unless the indexes are equal. The usual mismatch is data with
-gaps, which users can reindex first. Checking costs nothing when the Series
+gaps, which users can reindex first. Localized times that are the same
+instants in different time zones count as equal, as pandas aligns them; the
+result keeps the index of the first pandas argument, where pandas would give
+UTC. Checking costs nothing when the Series
 share an index object, as the columns of a DataFrame do, and about 70 µs for
 a year of 1-minute data otherwise.
 

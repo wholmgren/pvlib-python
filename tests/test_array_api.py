@@ -356,6 +356,9 @@ def _labeled_io_functions():
     import pkgutil
     found = set()
     for info in pkgutil.walk_packages(pvlib.__path__, 'pvlib.'):
+        if info.name.startswith('pvlib.spa_c_files'):
+            # build scripts for NREL's C code: importing setup.py runs it
+            continue
         try:
             module = importlib.import_module(info.name)
         except ImportError:  # optional dependencies

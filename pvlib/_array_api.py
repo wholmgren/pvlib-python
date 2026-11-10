@@ -461,13 +461,15 @@ def _common_index(found):
 
     They are unwrapped to arrays, which are matched by position, so their
     indexes must be equal: pvlib doesn't align them as pandas arithmetic
-    does, which would also make NaN where they differ.
+    does, which would also make NaN where they differ. Times in different
+    time zones are equal if they are the same instants, as for pandas; the
+    result has the index, and so the time zone, of the first.
     """
     (first, x), *others = found
     index = _index_of(x)
     for name, x in others:
         other = _index_of(x)
-        if other is not index and not other.equals(index):
+        if other is not index and not _same_index(other, index):
             raise ValueError(
                 f'{first} and {name} have different indexes. pvlib does not '
                 'align pandas inputs; make their indexes equal first, for '
@@ -477,6 +479,16 @@ def _common_index(found):
 
 def _index_of(x):
     return x if isinstance(x, pd.Index) else x.index
+
+
+def _same_index(a, b):
+    if a.equals(b):
+        return True
+    # Index.equals is False for the same instants in two time zones. Naive
+    # and localized times are never equal: pandas doesn't compare them
+    return (isinstance(a, pd.DatetimeIndex) and isinstance(b, pd.DatetimeIndex)
+            and a.tz is not None and b.tz is not None and len(a) == len(b)
+            and bool((a == b).all()))
 
 
 def _broadcasts_to(shape, target):
