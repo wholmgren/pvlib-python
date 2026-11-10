@@ -7,7 +7,6 @@ spectrum due to the atmosphere.
 import pvlib
 import numpy as np
 import pandas as pd
-from warnings import warn
 
 from pvlib import _array_api as _xa
 

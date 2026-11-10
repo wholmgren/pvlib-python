@@ -58,11 +58,11 @@ def test_pandas_labels_are_the_wavelengths(spectra, name):
     assert isinstance(expected, pd.Series)
     assert expected.index.equals(spectra.index)
     # one spectrum, a Series, gives a number
-    one = {'average_photon_energy': lambda: spectrum.average_photon_energy(
-               spectra.loc['direct']),
-           'calc_spectral_mismatch_field': lambda:
-               spectrum.calc_spectral_mismatch_field(
-                   sr, spectra.loc['direct'], spectra.loc['global'])}[name]()
+    if name == 'average_photon_energy':
+        one = spectrum.average_photon_energy(spectra.loc['direct'])
+    else:
+        one = spectrum.calc_spectral_mismatch_field(
+            sr, spectra.loc['direct'], spectra.loc['global'])
     assert isinstance(one, np.float64)
     assert_allclose(one, expected['direct'], rtol=1e-12)
 

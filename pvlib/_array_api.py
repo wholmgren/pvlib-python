@@ -972,7 +972,7 @@ def _coordinate(arguments, param, arrays, is_time):
         if shape and shape[-1] not in (n, 1):
             raise ValueError(
                 f'{k} has shape {shape}, but {param} has {n} values. '
-                f'{param} is along the last axis of the data; give values '
+                f'{param} is along the last axis of the data. Give values '
                 'that are constant along it a last axis of size 1')
     return None
 
