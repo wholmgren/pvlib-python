@@ -170,11 +170,14 @@ plt.show()
 coast = int((stored.sel(lat=TRANSECT, method='nearest') != 255).argmax())
 top = int(line_altitude.argmax())
 for name, i in [('Coast', coast), ('Highest cell', top)]:
-    print(f"{name}: {line['lon'][i].item():.1f}°, "
-          f"{line_altitude[i].item():.0f} m, "
-          f"Linke turbidity {line_turbidity.mean('month')[i].item():.1f}, "
-          f"clear-sky DNI {line['dni'][i].item():.0f} kWh/m², "
-          f"{at_sea_level['dni'][i].item():.0f} at sea level")
+    cell_lon = format(line['lon'][i].item(), '.1f')
+    cell_altitude = format(line_altitude[i].item(), '.0f')
+    cell_turbidity = format(line_turbidity.mean('month')[i].item(), '.1f')
+    cell_dni = format(line['dni'][i].item(), '.0f')
+    sea_level_dni = format(at_sea_level['dni'][i].item(), '.0f')
+    print(f'{name}: {cell_lon}°, {cell_altitude} m, '
+          f'Linke turbidity {cell_turbidity}, '
+          f'clear-sky DNI {cell_dni} kWh/m², {sea_level_dni} at sea level')
 
 # %%
 # These are clear-sky values, an upper bound: clouds, which pvlib's maps
