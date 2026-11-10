@@ -373,7 +373,10 @@ def _labeled_io_functions():
 
 def test_every_labeled_io_function_has_an_entry():
     # an entry runs the function through the array library tests
-    missing = _labeled_io_functions() - {qualified_name(k) for k in SUPPORTED}
+    from ._supported_functions import ELSEWHERE
+    tested = ({qualified_name(k) for k in SUPPORTED}
+              | {qualified_name(k) for k in ELSEWHERE})
+    missing = _labeled_io_functions() - tested
     assert not missing, f'add entries to _supported_functions: {missing}'
 
 
@@ -387,4 +390,6 @@ def test_user_guide_lists_the_supported_functions():
     section = guide.read_text().split('\nSupported functions\n')[1]
     section = section.split('\nOther functions take')[0]
     listed = set(re.findall(r':py:func:`~?(pvlib\.[\w.]+)`', section))
-    assert listed == {qualified_name(k) for k in SUPPORTED}
+    from ._supported_functions import ELSEWHERE
+    assert listed == ({qualified_name(k) for k in SUPPORTED}
+                      | {name for _, name in ELSEWHERE.values()})

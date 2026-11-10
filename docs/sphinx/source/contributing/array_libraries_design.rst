@@ -37,7 +37,8 @@ The goals fall into five tiers, each a promise of its own to keep:
 #. **Labeled grids:** xarray in, xarray out.
 #. **Lazy and compiled arrays:** Dask without computing, and ``jax.jit``.
 #. **Gradients** with PyTorch and JAX.
-#. **Time series** models on arrays without an index, and on N-D data.
+#. **Dimensions with a coordinate:** time series and spectral models on
+   arrays without labels, and on N-D data.
 
 The prototype goes through all five, with 36 functions, to find what each
 tier asks of the public API before any of it is released. The aim is that
@@ -80,9 +81,10 @@ than a first tier would need by itself.
    * - excluded values are kept out of the calculation, with ``where_safe``
      - 4
      - contributors
-   * - an optional ``times``, and time on the last axis
+   * - an optional coordinate (``times``, ``wavelength``), and its
+       dimension on the last axis
      - 5
-     - users of time series functions on arrays
+     - users of time series and spectral functions on arrays
 
 Two things follow from the table.
 
@@ -459,6 +461,103 @@ sub-daily data the model is for. With two times, where pandas can't infer a
 frequency, it raised before.
 
 
+.. _array-design-coordinates:
+
+Why the time rule is a coordinate rule
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Time is not the only dimension a pvlib function works along. The spectral
+functions integrate over wavelength, and they were ported to find out
+whether the rules for time were rules for time alone:
+:py:func:`~pvlib.spectrum.average_photon_energy` and
+:py:func:`~pvlib.spectrum.calc_spectral_mismatch_field`.
+
+**What users see holds.** An optional parameter for the coordinate, filled
+from the labels of pandas input, required for other arrays, along the last
+axis, and named by a DataArray's dimension: ``wavelength`` works exactly as
+``times`` does. pvlib had the pattern already, in
+:py:func:`~pvlib.spectrum.sr_to_qe` (``wavelength=None``). Spectra in a
+DataFrame have wavelength in their columns, which is the last axis, so the
+last axis is also what pandas users of these functions have.
+
+**The decorator was too narrow,** and changed: ``index_time`` became
+``coordinate``, with ``reduce`` for cores that remove the dimension. It is
+private, so no public signature changed. Three things were specific to
+time:
+
+- *The result kept the dimension.* An integral removes it: a Series gives a
+  number, a DataFrame a Series on its index, and a DataArray loses the
+  dimension.
+- *A DataFrame was a dict of columns,* as for the components of sky diffuse
+  irradiance. Spectra are a matrix: columns are the coordinate and the
+  index labels the rows of the result. Which one a DataFrame is depends on
+  the function, so the declaration decides: a matrix for a coordinate other
+  than time.
+- *The labels were a DatetimeIndex.* Any labels are a coordinate.
+
+**Arguments on different grids need labels.**
+:py:func:`~pvlib.spectrum.calc_spectral_mismatch_field` takes a spectral
+response, spectra and a reference spectrum, each a Series with wavelengths
+of its own, and interpolates between them. Arrays have one ``wavelength``
+for all three, and nothing is interpolated: three coordinate parameters
+would be the alternative. The interpolation stays in the public function,
+for pandas input, and the integral it calls twice is the core. So this
+function has no ``core`` of its own, like
+:py:func:`~pvlib.solarposition.spa_python`.
+
+**Defaults read from files are boundary work.** The default reference
+spectrum is read from a file and interpolated to the wavelengths, with
+pandas, then moved to the library and device of the data. Inside
+``jax.jit`` the wavelengths have no values yet, so ``e_ref`` must be given
+there, and the error says so.
+
+**spectrl2 is not ported, and needs an API change first.**
+:py:func:`~pvlib.spectrum.spectrl2` creates the wavelength dimension and
+puts it first: its results are 122 × N arrays, and a spectral
+``ground_albedo`` is 122 × N too. Three things follow.
+
+- It disagrees with the functions that use its results, which take
+  wavelength last, so users transpose in between today.
+- It takes only 1-D inputs, since a leading axis can't broadcast against
+  N-D ones. A grid of sites or orientations needs wavelength last.
+- It would be the first function to create a coordinate dimension, which
+  the boundary doesn't do yet: the result of a DataArray call needs the new
+  dimension and its coordinate.
+
+The change proposed is wavelength on the last axis of its results, N × 122,
+for every input type, after a deprecation period. Wavelength last for the
+new input types only would give NumPy and PyTorch users different layouts
+for the same call. DataArray results aren't affected, since the dimension
+has a name. This changes results for current users of a public function, so
+it is for discussion upstream before it is built.
+
+**Wavelength in DataFrames has no single convention.**
+:py:func:`~pvlib.spectrum.average_photon_energy` and
+:py:func:`~pvlib.spectrum.calc_spectral_mismatch_field` take it in the
+columns, with a spectrum in each row.
+:py:func:`~pvlib.spectrum.get_reference_spectra` returns it in the index,
+and :py:func:`~pvlib.spectrum.sr_to_qe` and
+:py:func:`~pvlib.spectrum.qe_to_sr` take it there. Both are natural in
+pandas, and the boundary can't tell them apart from the labels without
+guessing. The rule for ported functions is the one above: the last axis,
+which is the columns. The functions that use the index are left as they
+are, and aren't ported.
+
+Left open by this port:
+
+- A time series function could take a DataFrame of sites, but there the
+  coordinate is the index, the first axis. The boundary would transpose it.
+  DataFrames are not accepted by the time series functions today.
+- A coordinate given as a NumPy array with data from another library
+  raises, as any mix of libraries does, though datetimes follow the data.
+  Coordinates are usually NumPy arrays read from a file; letting them
+  follow the data too would be consistent with datetimes.
+- No function yet works along two such dimensions, time and wavelength,
+  say. They would be the last two axes, in an order to be fixed.
+- The test tables in ``tests/_supported_functions.py`` expect a result for
+  each input value, so functions with ``reduce`` have tests of their own.
+
+
 .. _array-design-autodiff:
 
 Why gradients and compilation shape the code
@@ -621,6 +720,28 @@ adopters, and both are still experimental.
      - tables of cases, run on each installed library
      - an ``xp`` fixture, marked by ``xp_capabilities``
      - common checks for estimators tagged ``array_api_support``
+
+
+.. _array-design-out-of-scope:
+
+Out of scope
+~~~~~~~~~~~~
+
+- **The classes.** :py:class:`~pvlib.modelchain.ModelChain`,
+  :py:class:`~pvlib.pvsystem.PVSystem` and
+  :py:class:`~pvlib.location.Location` stay on pandas. They are built on
+  DataFrames and column names, and porting them would mean a different
+  results container. A layer for other array libraries would be written on
+  top of the ported functions, outside these classes.
+- **DataFrame libraries that don't follow the standard,** such as polars.
+  The standard is what lets one copy of a model run on many libraries;
+  support for a library outside it would be conversion code in the boundary
+  that its users can write in a line, with ``to_numpy``.
+- **Fitting functions.** ``pvlib.ivtools``, :py:func:`~pvlib.iam.fit` and
+  :py:func:`~pvlib.inverter.fit_sandia` are algorithms around SciPy
+  optimizers and least squares. With gradients through the forward models,
+  users of other libraries can fit with those libraries' optimizers.
+- **Reading and writing data.** ``pvlib.iotools`` returns pandas objects.
 
 
 .. _array-design-open-questions:

@@ -37,7 +37,7 @@ time : dict
 one_d : tuple of str
     Parameters that must be series along time, never scalars, as for
     soiling.hsu. For these functions, the parameter that is in both ``time``
-    and ``one_d`` is the time of the data (labeled_io's index_time).
+    and ``one_d`` is the time of the data (labeled_io's coordinate).
 gradients : True or str
     True, the default, promises finite gradients with PyTorch and JAX, which
     test_array_api_gradients checks. A function that can't promise them
@@ -159,6 +159,19 @@ SUPPORTED = {
          'snow_depth': [5., 5., 5., 0.5], 'times': UNIX},
         {'initial_coverage': 0.5}, name=None, time={'times': 'unix'},
         one_d=('snowfall', 'times')),
+}
+
+
+# Functions that remove a dimension of their data, such as an integral over
+# wavelength, don't fit the entries above, which expect a result for each
+# input value. They are tested in the module named here, and listed in the
+# user guide under the name given
+ELSEWHERE = {
+    'spectrum.irradiance.average_photon_energy': (
+        'test_array_api_wavelength', 'pvlib.spectrum.average_photon_energy'),
+    'spectrum.mismatch.calc_spectral_mismatch_field': (
+        'test_array_api_wavelength',
+        'pvlib.spectrum.calc_spectral_mismatch_field'),
 }
 
 

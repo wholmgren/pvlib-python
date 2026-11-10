@@ -105,16 +105,28 @@ The decorator
     Parameters that take durations, such as a ``pd.Timedelta``. The core gets
     seconds.
 
-``index_time``
-    For time series functions, which take time from the index of their
-    Series: the ``times`` parameter, as in :py:func:`~pvlib.soiling.hsu`.
-    Add it last, as ``times=None``, list it in ``time`` too, and copy its
-    docstring from :py:func:`~pvlib.soiling.hsu`. The boundary takes time from
-    the index of Series, from the dimension of a ``times`` DataArray, or from
-    ``times`` along the last axis of other arrays, and raises if it is
-    missing or disagrees with the index; the core gets it on the last axis.
+``coordinate``
+    For functions that work along one dimension of their data: the parameter
+    that holds its coordinate. For time series functions, which take time
+    from the index of their Series, it is ``times``, as in
+    :py:func:`~pvlib.soiling.hsu`; for spectral functions it is
+    ``wavelength``, as in :py:func:`~pvlib.spectrum.average_photon_energy`.
+    Add it last, as ``times=None``, list a time in ``time`` too, and copy
+    its docstring from one of those functions. The boundary takes the
+    coordinate from the labels of pandas objects (the index of Series, and
+    for coordinates other than time the columns of DataFrames), from the
+    dimension of a DataArray of it, or from a 1-D array along the last axis
+    of other arrays, and raises if it is missing or disagrees with the
+    labels; the core gets the dimension on the last axis.
     See :ref:`array-libraries-time`.
-    (:ref:`why <array-design-time-series>`)
+    (:ref:`why <array-design-time-series>`,
+    :ref:`and for other dimensions <array-design-coordinates>`)
+
+``reduce``
+    ``True`` if the core removes the ``coordinate`` dimension, as an
+    integral over wavelength does. Use ``_xa.trapezoid(y, x, xp)`` for the
+    integral. The result then has the other dimensions of the data: a
+    number for a Series, a Series for a DataFrame.
 
 The core must return an array, a dict of arrays or a tuple of arrays. The
 boundary makes a dict into a DataFrame for pandas input and a Dataset for
@@ -288,7 +300,7 @@ seconds. Declare them with ``time={'x': 'unix'}``: the boundary then
 converts them to float64 apart from the other arrays and raises
 ``TypeError`` for float32. (:ref:`why <array-design-time>`)
 
-A time series function, declared with ``index_time``, gets ``times`` as
+A time series function, declared with ``coordinate='times'``, gets ``times`` as
 1-D Unix seconds and its data with time on the last axis, whatever the
 input type. Write the core for N-D data: pass ``axis=-1`` to
 ``cumulative_sum`` and the other functions that take an axis, index time
@@ -316,6 +328,9 @@ through:
 - ``tests/test_input_types_mixed.py``: calls that mix these types, and
   datetimes, so that every pair of types for every pair of arguments
   appears;
+- (a function with ``reduce`` doesn't fit these tables, which expect a
+  result for each input value: name it in ``ELSEWHERE`` in the same file
+  and test it as ``tests/test_array_api_wavelength.py`` does)
 - ``tests/test_array_api.py``: array-api-strict, PyTorch, JAX and Dask,
   checking that the function returns the type it was given and the values
   NumPy gives;
@@ -371,7 +386,9 @@ Leave a function on NumPy if it
   does: the standard has no scan;
 - calls SciPy optimizers or root finders, as the single-diode functions do;
 - returns datetimes, as the sunrise and sunset functions do;
-- needs results whose shape depends on the data.
+- needs results whose shape depends on the data;
+- creates a dimension, as :py:func:`~pvlib.spectrum.spectrl2` does for
+  wavelength: see :ref:`array-design-coordinates` for what it needs first.
 
 The solar position formulas in ``pvlib/spa.py`` are numba functions.
 ``spa._formulas(xp)`` runs their Python source on any library, with ``np``
@@ -385,7 +402,7 @@ Helper reference
 
 .. currentmodule:: pvlib._array_api
 
-.. autofunction:: labeled_io(name=INFER, arrays=(), time=None, timedelta=(), index_time=None)
+.. autofunction:: labeled_io(name=INFER, arrays=(), time=None, timedelta=(), coordinate=None, reduce=False)
 
 .. autofunction:: known_any
 
@@ -404,6 +421,8 @@ Helper reference
 .. autofunction:: rolling_sum
 
 .. autofunction:: take_last
+
+.. autofunction:: trapezoid
 
 .. autofunction:: array_namespace
 

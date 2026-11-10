@@ -15,7 +15,7 @@ _RAIN_TOLERANCE = 1e-9  # mm, see hsu
 @_xa.labeled_io(name=None,
                 arrays=('rainfall', 'times', 'surface_tilt', 'pm2_5', 'pm10'),
                 time={'times': 'unix'}, timedelta=('rain_accum_period',),
-                index_time='times')
+                coordinate='times')
 def hsu(rainfall, cleaning_threshold, surface_tilt, pm2_5, pm10,
         depo_veloc=None, rain_accum_period=pd.Timedelta('1h'), times=None, *,
         xp):

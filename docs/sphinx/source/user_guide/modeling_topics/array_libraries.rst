@@ -53,6 +53,8 @@ So far these functions accept arrays from other libraries:
 - snow: :py:func:`~pvlib.snow.fully_covered_nrel`,
   :py:func:`~pvlib.snow.coverage_nrel`
 - soiling: :py:func:`~pvlib.soiling.hsu`
+- spectrum: :py:func:`~pvlib.spectrum.average_photon_energy`,
+  :py:func:`~pvlib.spectrum.calc_spectral_mismatch_field`
 - tools: :py:func:`~pvlib.tools.cosd`, :py:func:`~pvlib.tools.sind`,
   :py:func:`~pvlib.tools.tand`, :py:func:`~pvlib.tools.asind`,
   :py:func:`~pvlib.tools.acosd`, :py:func:`~pvlib.tools.atand`,

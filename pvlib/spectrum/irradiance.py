@@ -9,7 +9,8 @@ import pandas as pd
 from pathlib import Path
 from functools import partial
 from scipy import constants
-from scipy.integrate import trapezoid
+
+from pvlib import _array_api as _xa
 
 
 def get_reference_spectra(wavelengths=None, standard="ASTM G173-03"):
@@ -117,26 +118,35 @@ def get_reference_spectra(wavelengths=None, standard="ASTM G173-03"):
     return standard
 
 
-def average_photon_energy(spectra):
+@_xa.labeled_io(name=None, arrays=('spectra', 'wavelength'),
+                coordinate='wavelength', reduce=True)
+def average_photon_energy(spectra, wavelength=None, *, xp):
     r"""
     Calculate the average photon energy of one or more spectral irradiance
     distributions.
 
     Parameters
     ----------
-    spectra : pandas.Series or pandas.DataFrame
+    spectra : pandas.Series, pandas.DataFrame, array or DataArray
 
         Spectral irradiance, must be positive [Wm⁻²nm⁻¹].
         See :term:`spectra`.
 
-        A single spectrum must be a :py:class:`pandas.Series` with wavelength
-        [nm] as the index, while multiple spectra must be rows in a
+        A single spectrum may be a :py:class:`pandas.Series` with wavelength
+        [nm] as the index, and multiple spectra rows in a
         :py:class:`pandas.DataFrame` with column headers as wavelength [nm].
+        Other arrays have wavelength along their last axis.
+    wavelength : array or DataArray, optional
+        Wavelengths of the spectra [nm]. Leave it out for pandas input,
+        whose labels are the wavelengths. Otherwise it is required and 1-D:
+        a DataArray, such as ``da.wavelength``, for DataArray spectra, whose
+        dimension is the wavelength, and for other arrays one along their
+        last axis.
 
     Returns
     -------
-    ape : numeric or pandas.Series
-        Average Photon Energy [eV].
+    ape : numeric, pandas.Series, array or DataArray
+        Average Photon Energy [eV], without the wavelength dimension.
         Note: returns ``np.nan`` in the case of all-zero spectral irradiance
         input, or where one or more spectral irradiance values is
         ``np.nan``.
@@ -185,27 +195,17 @@ def average_photon_energy(spectra):
        Photovoltaic in Europe Conference (pp. 1756-1759).
     """
 
-    if not isinstance(spectra, (pd.Series, pd.DataFrame)):
-        raise TypeError('`spectra` must be either a'
-                        ' pandas Series or DataFrame')
-
-    if (spectra < 0).any().any():
+    # wavelength is along the last axis of spectra, from labeled_io
+    if _xa.known_any(spectra < 0, xp):
         raise ValueError('Spectral irradiance data must be positive')
 
-    hclambda = pd.Series((constants.h*constants.c)/(spectra.T.index*1e-9))
-    hclambda.index = spectra.T.index
-    pfd = spectra.div(hclambda)
+    hclambda = (constants.h*constants.c)/(wavelength*1e-9)
+    pfd = spectra / hclambda
 
-    def integrate(e):
-        return trapezoid(e, x=e.T.index, axis=-1)
+    int_spectra = _xa.trapezoid(spectra, wavelength, xp)
+    int_pfd = _xa.trapezoid(pfd, wavelength, xp)
 
-    int_spectra = integrate(spectra)
-    int_pfd = integrate(pfd)
-
-    with np.errstate(invalid='ignore'):
+    with _xa.errstate(xp, invalid='ignore'):
         ape = (1/constants.elementary_charge)*int_spectra/int_pfd
-
-    if isinstance(spectra, pd.DataFrame):
-        ape = pd.Series(ape, index=spectra.index)
 
     return ape

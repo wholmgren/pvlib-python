@@ -12,7 +12,7 @@ from pvlib.tools import _sind, cosd, tand
 @_xa.labeled_io(name=None,
                 arrays=('snowfall', 'snow_depth', 'threshold_snowfall',
                         'threshold_depth', 'times'),
-                time={'times': 'unix'}, index_time='times')
+                time={'times': 'unix'}, coordinate='times')
 def fully_covered_nrel(snowfall, snow_depth=None, threshold_snowfall=1.,
                        threshold_depth=1., times=None, *, xp):
     '''
@@ -87,7 +87,7 @@ def fully_covered_nrel(snowfall, snow_depth=None, threshold_snowfall=1.,
                         'threshold_snowfall', 'threshold_depth',
                         'can_slide_coefficient', 'slide_amount_coefficient',
                         'times'),
-                time={'times': 'unix'}, index_time='times')
+                time={'times': 'unix'}, coordinate='times')
 def coverage_nrel(snowfall, poa_irradiance, temp_air, surface_tilt,
                   snow_depth=None, initial_coverage=0, threshold_snowfall=1.,
                   threshold_depth=1., can_slide_coefficient=-80.,

@@ -38,10 +38,15 @@ and Timedeltas to float seconds. Inside the core, :py:func:`unix_to_civil`
 recovers calendar fields and :py:func:`rolling_sum` does time-window
 aggregation, on any array library.
 
-Time series functions, which step through time (``labeled_io``'s
-``index_time``), take time from one place per input type: the index of
-Series, the dimension of a ``times`` DataArray, or a 1-D ``times`` along the
-last axis of other arrays. The core always gets time on the last axis.
+Coordinates
+-----------
+Some functions work along one dimension of their data: time series functions
+step through time, and spectral functions integrate over wavelength. They
+declare the parameter that holds the coordinate of that dimension
+(``labeled_io``'s ``coordinate``), ``times`` or ``wavelength``, and take it
+from one place per input type: the labels of pandas objects, the dimension
+of a DataArray of the coordinate, or a 1-D array along the last axis of
+other arrays. The core always gets the dimension on the last axis.
 """
 
 import contextlib
@@ -396,6 +401,15 @@ def where_safe(cond, x, f, fill_value, xp, safe=1.):
     return xp.where(cond, f(xp.where(cond, x, safe)), fill_value)
 
 
+def trapezoid(y, x, xp):
+    """
+    Integral of ``y`` over ``x`` along the last axis by the trapezoidal
+    rule, like ``scipy.integrate.trapezoid(y, x=x, axis=-1)``. ``x`` is 1-D
+    or broadcasts with ``y``. The standard has no integration functions.
+    """
+    return xp.sum(xp.diff(x) * (y[..., 1:] + y[..., :-1]) / 2., axis=-1)
+
+
 def scipy_array_api():
     """
     True if SciPy's array API support is on, so that ``scipy.special``
@@ -534,7 +548,7 @@ def _wrap_pandas(out, index, name):
     return out
 
 
-def _call_xarray(arguments, call, name, time_dim=None):
+def _call_xarray(arguments, call, name, time_dim=None, reduce=False):
     """
     Call ``call`` on the underlying arrays of the DataArray ``arguments``
     with :py:func:`xarray.apply_ufunc`, and label the result.
@@ -547,7 +561,8 @@ def _call_xarray(arguments, call, name, time_dim=None):
 
     ``time_dim`` names the time dimension of a time series function. It is
     the last axis of every array the core gets, and of the result, wherever
-    it was in the inputs; arrays without it get a size-1 last axis.
+    it was in the inputs; arrays without it get a size-1 last axis. With
+    ``reduce``, the core's results lack that axis.
     """
     import xarray as xr
 
@@ -584,8 +599,9 @@ def _call_xarray(arguments, call, name, time_dim=None):
         # apply_ufunc labels one output; the others get its labels below.
         # Outputs with fewer dimensions are broadcast and copied, since
         # broadcast arrays are read-only views
-        outputs = [o if tuple(o.shape) == full else _broadcast_copy(o, full)
-                   for o in outputs]
+        shape = full[:-1] if reduce else full
+        outputs = [o if tuple(o.shape) == shape
+                   else _broadcast_copy(o, shape) for o in outputs]
         called.update(out=out, outputs=outputs)
         return outputs[0]
 
@@ -594,7 +610,8 @@ def _call_xarray(arguments, call, name, time_dim=None):
     first = xr.apply_ufunc(
         call_on_data, *(arguments[k] for k in keys), dask='allowed',
         input_core_dims=core,
-        output_core_dims=[[]] if time_dim is None else [[time_dim]],
+        output_core_dims=[[]] if time_dim is None or reduce
+        else [[time_dim]],
         join=xr.get_options()['arithmetic_join'], keep_attrs=False)
     out = called['out']
     labeled = [first] + [first.copy(data=o) for o in called['outputs'][1:]]
@@ -691,7 +708,7 @@ def _convert_arrays(arguments, names, unix=()):
 
 
 def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
-               index_time=None):
+               coordinate=None, reduce=False):
     """
     Make a function written against the array API (the core) into a pvlib
     function (the boundary) that accepts and returns pandas objects, xarray
@@ -720,7 +737,7 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
     Calls whose arguments are all numbers, strings or None skip steps 1 and
     2: the core gets the numbers as NumPy float64 scalars, which NumPy
     handles faster than 0-d arrays, unless the function has ``timedelta``
-    or ``index_time`` parameters.
+    or ``coordinate`` parameters.
 
     pvlib functions call each other's cores, ``f.core(..., xp=xp)``, with
     arguments that are already arrays of ``xp``, so this work isn't repeated.
@@ -745,24 +762,32 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
         indexes a pandas result.
     timedelta : tuple of str, optional
         Parameters converted from Timedelta-like to float seconds.
-    index_time : str, optional
-        The time parameter of a time series function, one whose pandas API
-        takes time from the index. It defaults to None, comes last in the
-        signature, and should also appear in ``time``. Time then comes from
-        one place, by the type of the other ``arrays`` arguments:
+    coordinate : str, optional
+        The parameter that holds the coordinate of the dimension a function
+        works along: ``times`` of a time series function, ``wavelength`` of
+        a spectral one. It defaults to None and comes last in the
+        signature; a time is also listed in ``time``. The coordinate then
+        comes from one place, by the type of the other ``arrays`` arguments:
 
-        - Series with a DatetimeIndex: the index of the first. If the
-          parameter is given too, it must be the same times (compared as
-          instants) or ``ValueError`` is raised.
+        - pandas objects: their labels. For a time, the DatetimeIndex of
+          the first Series. For other coordinates, the index of Series and
+          the columns of DataFrames, which are then matrices whose rows are
+          labeled by their index, such as spectra by time; these labels
+          must be equal. If the parameter is given too, it must equal the
+          labels (times compared as instants) or ``ValueError`` is raised.
         - DataArrays: the parameter, which must be a 1-D DataArray. Its
-          dimension is time, wherever it is in the other DataArrays.
-        - anything else: the parameter, which must be 1-D. Time is the last
-          axis of the other arrays.
+          dimension is the one, wherever it is in the other DataArrays.
+        - anything else: the parameter, which must be 1-D. The dimension is
+          the last axis of the other arrays.
 
         If one of them is missing, or a DataArray is given without a
-        DataArray of times, ``ValueError`` is raised. In all three cases the
-        core gets time on the last axis of its arrays, and the result has it
-        there too.
+        DataArray of the coordinate, ``ValueError`` is raised. In all three
+        cases the core gets the dimension on the last axis of its arrays.
+    reduce : bool, default False
+        Whether the core removes the ``coordinate`` dimension, as an
+        integral over wavelength does. The result then has the other
+        dimensions: a scalar for a Series, and a Series on the index of a
+        DataFrame. Otherwise the result has the dimension on its last axis.
     """
     time = time or {}
 
@@ -807,9 +832,9 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
             xp = _convert_arrays(arguments, arrays, unix)
             return func(**arguments, xp=xp)
 
-        # functions with Timedelta defaults or time from an index need the
-        # full boundary even for scalars
-        fast = not (timedelta or index_time)
+        # functions with Timedelta defaults or a coordinate need the full
+        # boundary even for scalars
+        fast = not (timedelta or coordinate)
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -832,10 +857,11 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
             keys = list(given)
             out_name = name(arguments) if callable(name) else name
             time_dim = None
-            if index_time:
-                time_dim = _series_time(arguments, index_time, arrays)
-                if index_time not in given:
-                    keys.append(index_time)
+            if coordinate:
+                time_dim = _coordinate(arguments, coordinate, arrays,
+                                       coordinate in time)
+                if coordinate not in given:
+                    keys.append(coordinate)
             for k in timedelta:
                 if k in arguments:
                     arguments[k] = _timedelta_to_seconds(arguments[k])
@@ -850,7 +876,14 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
                 arguments = {k: arguments[k] for k in names if k in arguments}
                 return _call_xarray(arguments,
                                     lambda: call_core(arguments, times),
-                                    out_name, time_dim)
+                                    out_name, time_dim, reduce)
+            if coordinate and coordinate not in time:
+                last, lead = _unwrap_matrices(arguments, keys)
+                if last is not None:
+                    out = call_core(arguments, times)
+                    return _wrap_matrix(
+                        out, last, lead, reduce,
+                        None if out_name is _INFER else out_name)
             found, masks = [], []
             for k in keys:
                 v = arguments[k]
@@ -868,7 +901,7 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
             if not found:
                 if masks:
                     return _wrap_masked(out, masks)
-                return _scalarize(out) if scalar else out
+                return _scalarize(out) if scalar or reduce else out
             if out_name is _INFER:
                 names_ = {x.name for _, x in found if isinstance(x, pd.Series)}
                 out_name = names_.pop() if len(names_) == 1 else None
@@ -883,11 +916,11 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
 labeled_io.INFER = _INFER
 
 
-def _series_time(arguments, param, arrays):
+def _coordinate(arguments, param, arrays, is_time):
     """
-    Apply the time rule of ``labeled_io``'s ``index_time`` to ``param``:
-    fill it in from the index of Series data, check it, and return the name
-    of the time dimension of DataArray data, or None.
+    Apply the rule of ``labeled_io``'s ``coordinate`` to ``param``: fill it
+    in from the labels of pandas data, check it, and return the name of its
+    dimension in DataArray data, or None.
     """
     t = arguments.get(param)
     data = {k: arguments[k] for k in arrays
@@ -895,31 +928,111 @@ def _series_time(arguments, param, arrays):
     if _is_dataarray(t) or any(_is_dataarray(v) for v in data.values()):
         if not (_is_dataarray(t) and t.ndim == 1):
             raise ValueError(
-                f'{param} must be a 1-D DataArray, such as da.time, when the '
-                'data are DataArrays: its dimension says which one is time')
+                f'{param} must be a 1-D DataArray, such as da.{param}, when '
+                'the data are DataArrays: its dimension says which one it '
+                'is in the data')
         return t.dims[0]
-    index = next((v.index for v in data.values() if isinstance(v, pd.Series)
-                  and isinstance(v.index, pd.DatetimeIndex)), None)
-    if index is not None:
-        if t is not None:
-            _check_same_times(t, index, param)
-        arguments[param] = index
-        return None
+    if is_time:
+        labels = next((v.index for v in data.values()
+                       if isinstance(v, pd.Series)
+                       and isinstance(v.index, pd.DatetimeIndex)), None)
+        if labels is not None:
+            if t is not None:
+                _check_same_times(t, labels, param)
+            arguments[param] = labels
+            return None
+        source = 'Series with a DatetimeIndex'
+    else:
+        labels = next((_last_labels(v) for v in data.values()
+                       if isinstance(v, (pd.Series, pd.DataFrame))), None)
+        if labels is not None:
+            if t is not None:
+                _check_same_labels(t, labels, param)
+            t = arguments[param] = labels.to_numpy()
+        source = 'Series or DataFrames labeled with it'
     if t is None:
-        raise ValueError(f'{param} is required unless the data are Series '
-                         'with a DatetimeIndex')
+        raise ValueError(f'{param} is required unless the data are {source}')
     if np.ndim(t) != 1:
-        raise ValueError(f'{param} must be 1-D, not {np.ndim(t)}-D: time is '
-                         'the last axis of the data')
+        raise ValueError(f'{param} must be 1-D, not {np.ndim(t)}-D: it is '
+                         'along the last axis of the data')
     n = np.shape(t)[0]
     for k, v in data.items():
         shape = tuple(np.shape(v)) if not isinstance(v, dict) else ()
         if shape and shape[-1] not in (n, 1):
             raise ValueError(
-                f'{k} has shape {shape}, but {param} has {n} values. Time is '
-                'the last axis of the data; give values that are constant in '
-                'time a last axis of size 1')
+                f'{k} has shape {shape}, but {param} has {n} values. '
+                f'{param} is along the last axis of the data; give values '
+                'that are constant along it a last axis of size 1')
     return None
+
+
+def _last_labels(x):
+    """The labels of the last axis of a Series or DataFrame."""
+    return x.index if isinstance(x, pd.Series) else x.columns
+
+
+def _check_same_labels(t, labels, param):
+    try:
+        same = np.array_equal(np.asarray(t, dtype=np.float64),
+                              np.asarray(labels, dtype=np.float64))
+    except (TypeError, ValueError):
+        same = False
+    if not same:
+        raise ValueError(
+            f'{param} differs from the labels of the pandas data. For '
+            f'pandas data the labels are the {param}: leave out {param}, or '
+            'make it equal the labels')
+
+
+def _unwrap_matrices(arguments, keys):
+    """
+    Replace the pandas arguments of a function along a coordinate that isn't
+    time by their values. Series are indexed by the coordinate; DataFrames
+    have it in their columns and are matrices, whose index labels the rows
+    of the result. Returns the labels of the last axis and of the rows,
+    each None if no argument has them. Each must be equal in all arguments.
+    """
+    last = lead = None
+    for k in keys:
+        v = arguments[k]
+        if not isinstance(v, (pd.Series, pd.DataFrame)):
+            continue
+        labels = _last_labels(v)
+        if last is None:
+            last, first = labels, k
+        elif not _same_index(labels, last):
+            raise ValueError(
+                f'{first} and {k} have different labels along their last '
+                'axis. pvlib does not align pandas inputs; make the labels '
+                'equal first, for example by interpolating')
+        if isinstance(v, pd.DataFrame):
+            if lead is None:
+                lead, first_rows = v.index, k
+            elif not _same_index(v.index, lead):
+                raise ValueError(
+                    f'{first_rows} and {k} have different indexes. pvlib '
+                    'does not align pandas inputs; make their indexes equal '
+                    'first, for example with reindex')
+        arguments[k] = v.to_numpy()
+    return last, lead
+
+
+def _wrap_matrix(out, last, lead, reduce, name):
+    """Label the result of a function along a coordinate that isn't time:
+    ``last`` along its last axis unless the core removed it, ``lead`` along
+    its rows."""
+    if not isinstance(out, np.ndarray):
+        return out
+    if reduce:
+        if out.ndim == 0:
+            return out[()]
+        if out.ndim == 1 and lead is not None:
+            return pd.Series(out, index=lead, name=name)
+    elif out.ndim == 1:
+        return pd.Series(out, index=last, name=name)
+    elif out.ndim == 2 and lead is not None:
+        return pd.DataFrame(out, index=lead, columns=last)
+    return out
 
 
 def _check_same_times(t, index, param):

@@ -5,7 +5,7 @@ snow model), on N-D data from any library.
 Time comes from one place for each input type: the index of Series, the
 dimension of a DataArray of times, or a 1-D array of times along the last
 axis of other arrays. See "Time series" in the user guide's array libraries
-page, and labeled_io's index_time.
+page, and labeled_io's coordinate.
 """
 import numpy as np
 import pandas as pd

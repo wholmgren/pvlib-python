@@ -7,36 +7,45 @@ spectrum due to the atmosphere.
 import pvlib
 import numpy as np
 import pandas as pd
-from scipy.integrate import trapezoid
-
 from warnings import warn
 
+from pvlib import _array_api as _xa
 
-def calc_spectral_mismatch_field(sr, e_sun, e_ref=None):
+
+def calc_spectral_mismatch_field(sr, e_sun, e_ref=None, wavelength=None):
     """
     Calculate spectral mismatch between a test device and broadband reference
     device under specified solar spectral irradiance conditions.
 
     Parameters
     ----------
-    sr: pandas.Series
+    sr: pandas.Series, array or DataArray
         The relative spectral response of one (photovoltaic) test device.
-        The index of the Series must contain wavelength values in nm. [-]
+        The index of a Series must contain wavelength values in nm. [-]
 
-    e_sun: pandas.DataFrame or pandas.Series
+    e_sun: pandas.DataFrame, pandas.Series, array or DataArray
         One or more measured solar irradiance spectra in a pandas.DataFrame
         having wavelength in nm as column index. A single spectrum may be
         be given as a pandas.Series having wavelength in nm as index.
-        [(W/m^2)/nm]
+        Other arrays have wavelength along their last axis. [(W/m^2)/nm]
 
-    e_ref: pandas.Series, optional
+    e_ref: pandas.Series, array or DataArray, optional
         The reference spectrum to use for the mismatch calculation.
-        The index of the Series must contain wavelength values in nm.
+        The index of a Series must contain wavelength values in nm.
         The default is the ASTM G173-03 global tilted spectrum. [(W/m^2)/nm]
+
+    wavelength : array or DataArray, optional
+        Wavelengths in nm that ``sr``, ``e_sun`` and ``e_ref`` share. Leave
+        it out for pandas input, whose labels are the wavelengths and may
+        differ between the three. Otherwise it is required and 1-D: a
+        DataArray, such as ``da.wavelength``, for DataArray input, whose
+        dimension is the wavelength, and for other arrays one along their
+        last axis. Nothing is interpolated then.
 
     Returns
     -------
-    smm: pandas.Series or float if a single measured spectrum is provided. [-]
+    smm: pandas.Series or float if a single measured spectrum is provided,
+        otherwise an array or DataArray without the wavelength dimension. [-]
 
     Notes
     -----
@@ -85,6 +94,21 @@ def calc_spectral_mismatch_field(sr, e_sun, e_ref=None):
     """
     # Contributed by Anton Driesse (@adriesse), PV Performance Labs. Aug. 2022
 
+    if wavelength is not None:
+        # everything is on these wavelengths
+        if e_ref is None:
+            e_ref = _reference_spectrum_like(wavelength)
+        uf_sun = _usable_fraction(sr, e_sun, wavelength)
+        uf_ref = _usable_fraction(sr, e_ref, wavelength)
+        return uf_sun / uf_ref
+
+    # pandas input: sr, e_sun and e_ref each have their own wavelengths in
+    # their labels. Arrays have no labels to interpolate between
+    if not (isinstance(sr, pd.Series)
+            and isinstance(e_sun, (pd.Series, pd.DataFrame))):
+        raise ValueError('wavelength is required unless sr is a Series and '
+                         'e_sun a Series or DataFrame labeled with it')
+
     # get the reference spectrum at wavelengths matching the measured spectra
     if e_ref is None:
         e_ref = pvlib.spectrum.get_reference_spectra(
@@ -95,21 +119,48 @@ def calc_spectral_mismatch_field(sr, e_sun, e_ref=None):
     sr_sun = np.interp(e_sun.T.index, sr.index, sr, left=0.0, right=0.0)
     sr_ref = np.interp(e_ref.T.index, sr.index, sr, left=0.0, right=0.0)
 
-    # a helper function to make usable fraction calculations more readable
-    def integrate(e):
-        return trapezoid(e, x=e.T.index, axis=-1)
-
     # calculate usable fractions
-    uf_sun = integrate(e_sun * sr_sun) / integrate(e_sun)
-    uf_ref = integrate(e_ref * sr_ref) / integrate(e_ref)
+    uf_sun = _usable_fraction(sr_sun, e_sun)
+    uf_ref = _usable_fraction(sr_ref, e_ref)
 
     # mismatch is the ratio or quotient of the usable fractions
     smm = uf_sun / uf_ref
 
-    if isinstance(e_sun, pd.DataFrame):
-        smm = pd.Series(smm, index=e_sun.index)
-
     return smm
+
+
+@_xa.labeled_io(name=None, arrays=('sr', 'e', 'wavelength'),
+                coordinate='wavelength', reduce=True)
+def _usable_fraction(sr, e, wavelength=None, *, xp):
+    # the fraction of the spectrum e that a device with spectral response sr
+    # uses. wavelength is along the last axis of both, from labeled_io
+    return (_xa.trapezoid(e * sr, wavelength, xp)
+            / _xa.trapezoid(e, wavelength, xp))
+
+
+def _reference_spectrum_like(wavelength):
+    """The default reference spectrum at ``wavelength``, as an array of its
+    library and device, or a DataArray along its dimension."""
+    if _xa._is_dataarray(wavelength):
+        return wavelength.copy(data=_reference_spectrum_like(wavelength.data))
+    xp = _xa.array_namespace(wavelength)
+    if xp is _xa.np_compat:
+        return pvlib.spectrum.get_reference_spectra(
+            wavelengths=np.asarray(wavelength, dtype=float)
+        )["global"].to_numpy()
+    if not _xa.is_concrete(wavelength):
+        raise ValueError('the default e_ref is read from a file at these '
+                         'wavelengths, whose values are not known inside '
+                         'jax.jit or for lazy arrays; pass e_ref')
+    try:
+        values = np.from_dlpack(wavelength)
+    except (TypeError, ValueError, RuntimeError, BufferError,
+            AttributeError):
+        values = np.asarray(wavelength)
+    e_ref = pvlib.spectrum.get_reference_spectra(
+        wavelengths=np.asarray(values, dtype=float))["global"].to_numpy()
+    return xp.asarray(e_ref, dtype=wavelength.dtype,
+                      device=_xa.array_api_compat.device(wavelength))
 
 
 def spectral_factor_firstsolar(precipitable_water, airmass_absolute,
