@@ -11,6 +11,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    'array-api-compat >= 1.12',
     'numpy >= 1.23.2',
     'pandas >= 1.5.0',
     'pytz',
@@ -67,6 +68,9 @@ doc = [
     'sphinx-favicon',
     'solarfactors >= 1.6.1',
     'sphinx-hoverxref ~= 1.4.2',  # when updating, check that _static/tooltipster_color_theming.css still works
+    # array library examples; not torch, whose Linux wheels pull in CUDA
+    'xarray',
+    'jax',
 ]
 test = [
     'pytest',

@@ -4,8 +4,9 @@ Low-level functions for solving the single diode equation.
 
 import numpy as np
 import pandas as pd
+from pvlib import _array_api as _xa
 from pvlib.tools import _golden_sect_DataFrame
-from pvlib.ivtools.utils import _lambertw_pvlib, _log_lambertw
+from pvlib.ivtools.utils import _lambertw_pvlib
 
 from scipy.optimize import brentq, newton
 
@@ -751,135 +752,133 @@ def _prepare_newton_inputs(x0, args, method_kwargs):
     return x0, args, method_kwargs
 
 
+def _numpy_args(args):
+    # for calls from NumPy code inside pvlib, with scalars, arrays or Series
+    scalar = all(map(np.isscalar, args))
+    return scalar, [np.asarray(x, dtype=np.float64) for x in args]
+
+
 def _lambertw_v_from_i(current, photocurrent, saturation_current,
-                       resistance_series, resistance_shunt, nNsVth):
-    # Record if inputs were all scalar
-    output_is_scalar = all(map(np.isscalar,
-                               (current, photocurrent, saturation_current,
-                                resistance_series, resistance_shunt, nNsVth)))
+                       resistance_series, resistance_shunt, nNsVth, *,
+                       xp=None):
+    """
+    Voltage at ``current`` by the Lambert W solution. With ``xp``, the
+    arguments are arrays of that namespace; without, anything NumPy takes.
+    """
+    args = (current, photocurrent, saturation_current, resistance_series,
+            resistance_shunt, nNsVth)
+    if xp is None:
+        scalar, args = _numpy_args(args)
+        V = _lambertw_v_from_i(*args, xp=np)
+        return V.item() if scalar else np.asarray(V)
+    I, IL, I0, Rs, Rsh, a = args                            # noqa: E741, N806
 
     # This transforms Gsh=1/Rsh, including ideal Rsh=np.inf into Gsh=0., which
     #  is generally more numerically stable
-    conductance_shunt = 1. / resistance_shunt
+    Gsh = 1. / Rsh
 
-    # Ensure that we are working with read-only views of numpy arrays
-    # Turns Series into arrays so that we don't have to worry about
-    #  multidimensional broadcasting failing
-    I, IL, I0, Rs, Gsh, a = \
-        np.broadcast_arrays(current, photocurrent, saturation_current,
-                            resistance_series, conductance_shunt, nNsVth)
-
-    # Intitalize output V (I might not be float64)
-    V = np.full_like(I, np.nan, dtype=np.float64)
-
-    # Determine indices where 0 < Gsh requires implicit model solution
-    idx_p = 0. < Gsh
-
-    # Determine indices where 0 = Gsh allows explicit model solution
-    idx_z = 0. == Gsh
+    # NaN where Gsh is NaN or negative
+    V = xp.nan
 
     # Explicit solutions where Gsh=0
-    if np.any(idx_z):
-        V[idx_z] = a[idx_z] * np.log1p((IL[idx_z] - I[idx_z]) / I0[idx_z]) - \
-                   I[idx_z] * Rs[idx_z]
+    idx_z = Gsh == 0.
+    if _xa.maybe_any(idx_z, xp):
+        # the implicit cases get log1p(0), which keeps a log of a negative
+        # number out of their derivatives
+        ratio = xp.where(idx_z, (IL - I) / I0, 0.)
+        V = xp.where(idx_z, a * xp.log1p(ratio) - I * Rs, V)
 
     # Only compute using LambertW if there are cases with Gsh>0
-    if np.any(idx_p):
+    idx_p = Gsh > 0.
+    if _xa.maybe_any(idx_p, xp):
+        # the explicit cases get Gsh=1, which keeps 1/Gsh out of their
+        # values and derivatives
+        Gsh = xp.where(idx_p, Gsh, 1.)
+        exponent = (-I + IL + I0) / (Gsh * a)
+        # LambertW argument, cannot be float128, may overflow to np.inf.
+        # exp gets at most 700, so that it stays finite and an overflow
+        # stays out of the derivatives
+        with _xa.errstate(xp, over='ignore'):
+            argW = I0 / (Gsh * a) * xp.exp(xp.minimum(exponent, 700.))
+        argW = xp.where(exponent > 700., xp.inf, argW)
 
-        # use only the relevant subset for what follows
-        I = I[idx_p]
-        IL = IL[idx_p]
-        I0 = I0[idx_p]
-        Rs = Rs[idx_p]
-        Gsh = Gsh[idx_p]
-        a = a[idx_p]
-
-        # LambertW argument, cannot be float128, may overflow to np.inf
-        # overflow is explicitly handled below, so ignore warnings here
-        with np.errstate(over='ignore'):
-            argW = I0 / (Gsh * a) * np.exp((-I + IL + I0) / (Gsh * a))
-
-        lambertwterm = np.zeros_like(argW)
-
-        # Record indices where lambertw input overflowed
-        idx_inf = np.isinf(argW)
-
-        lambertwterm[~idx_inf] = _lambertw_pvlib(argW[~idx_inf])
-
-        # Only re-compute LambertW if it overflowed
-        if np.any(idx_inf):
-            # Calculate using log(argW) in case argW is really big
-            logargW = (np.log(I0[idx_inf]) - np.log(Gsh[idx_inf]) -
-                       np.log(a[idx_inf]) +
-                       (-I[idx_inf] + IL[idx_inf] + I0[idx_inf]) /
-                       (Gsh[idx_inf] * a[idx_inf]))
-            lambertwterm[idx_inf] = _log_lambertw(logargW)
+        # Only compute the log of the argument, from which W is calculated
+        # where the argument overflowed, if it did
+        logargW = None
+        if _xa.maybe_any(xp.isinf(argW), xp):
+            with _xa.errstate(xp, divide='ignore'):
+                logargW = xp.log(I0) - xp.log(Gsh) - xp.log(a) + exponent
+        lambertwterm = _lambertw_pvlib(argW, xp, logx=logargW)
 
         # Eqn. 3 in Jain and Kapoor, 2004
         #  V = -I*(Rs + Rsh) + IL*Rsh - a*lambertwterm + I0*Rsh
         # Recast in terms of Gsh=1/Rsh for better numerical stability.
-        V[idx_p] = (IL + I0 - I) / Gsh - I * Rs - a * lambertwterm
+        V = xp.where(idx_p, (IL + I0 - I) / Gsh - I * Rs - a * lambertwterm,
+                     V)
 
-    if output_is_scalar:
-        return V.item()
-    else:
-        return V
+    if not _xa.is_array_api_obj(V):
+        # neither solution applies to any element
+        V = V + xp.zeros_like(I + IL + I0 + Rs + Rsh + a)
+    # asarray: NumPy arithmetic turns 0-d arrays into scalars
+    return xp.asarray(V)
 
 
 def _lambertw_i_from_v(voltage, photocurrent, saturation_current,
-                       resistance_series, resistance_shunt, nNsVth):
-    # Record if inputs were all scalar
-    output_is_scalar = all(map(np.isscalar,
-                               (voltage, photocurrent, saturation_current,
-                                resistance_series, resistance_shunt, nNsVth)))
+                       resistance_series, resistance_shunt, nNsVth, *,
+                       xp=None):
+    """
+    Current at ``voltage`` by the Lambert W solution. With ``xp``, the
+    arguments are arrays of that namespace; without, anything NumPy takes.
+    """
+    args = (voltage, photocurrent, saturation_current, resistance_series,
+            resistance_shunt, nNsVth)
+    if xp is None:
+        scalar, args = _numpy_args(args)
+        I = _lambertw_i_from_v(*args, xp=np)                # noqa: E741, N806
+        return I.item() if scalar else np.asarray(I)
+    V, IL, I0, Rs, Rsh, a = args
 
     # This transforms Gsh=1/Rsh, including ideal Rsh=np.inf into Gsh=0., which
     #  is generally more numerically stable
-    conductance_shunt = 1. / resistance_shunt
+    Gsh = 1. / Rsh
 
-    # Ensure that we are working with read-only views of numpy arrays
-    # Turns Series into arrays so that we don't have to worry about
-    #  multidimensional broadcasting failing
-    V, IL, I0, Rs, Gsh, a = \
-        np.broadcast_arrays(voltage, photocurrent, saturation_current,
-                            resistance_series, conductance_shunt, nNsVth)
-
-    # Intitalize output I (V might not be float64)
-    I = np.full_like(V, np.nan, dtype=np.float64)           # noqa: E741, N806
-
-    # Determine indices where 0 < Rs requires implicit model solution
-    idx_p = 0. < Rs
-
-    # Determine indices where 0 = Rs allows explicit model solution
-    idx_z = 0. == Rs
+    # NaN where Rs is NaN or negative
+    I = xp.nan                                              # noqa: E741, N806
 
     # Explicit solutions where Rs=0
-    if np.any(idx_z):
-        I[idx_z] = IL[idx_z] - I0[idx_z] * np.expm1(V[idx_z] / a[idx_z]) - \
-            Gsh[idx_z] * V[idx_z]
+    idx_z = Rs == 0.
+    if _xa.maybe_any(idx_z, xp):
+        # the implicit cases get V=0, which keeps an overflow of exp out of
+        # their derivatives
+        Vz = xp.where(idx_z, V, 0.)
+        I = xp.where(idx_z,                                 # noqa: E741, N806
+                     IL - I0 * xp.expm1(Vz / a) - Gsh * Vz, I)
 
     # Only compute using LambertW if there are cases with Rs>0
     # Does NOT handle possibility of overflow, github issue 298
-    if np.any(idx_p):
+    idx_p = Rs > 0.
+    if _xa.maybe_any(idx_p, xp):
+        # the explicit cases get Rs=1, which keeps 1/Rs out of their values
+        # and derivatives
+        Rs = xp.where(idx_p, Rs, 1.)
+        scale = a * (Rs * Gsh + 1.)
         # LambertW argument, cannot be float128, may overflow to np.inf
-        argW = Rs[idx_p] * I0[idx_p] / (
-            a[idx_p] * (Rs[idx_p] * Gsh[idx_p] + 1.)) * (
-                np.exp((Rs[idx_p] * (IL[idx_p] + I0[idx_p]) + V[idx_p])
-                       / (a[idx_p] * (Rs[idx_p] * Gsh[idx_p] + 1.))))
+        argW = Rs * I0 / scale * xp.exp((Rs * (IL + I0) + V) / scale)
 
-        lambertwterm = _lambertw_pvlib(argW)
+        lambertwterm = _lambertw_pvlib(argW, xp)
 
         # Eqn. 2 in Jain and Kapoor, 2004
         #  I = -V/(Rs + Rsh) - (a/Rs)*lambertwterm + Rsh*(IL + I0)/(Rs + Rsh)
         # Recast in terms of Gsh=1/Rsh for better numerical stability.
-        I[idx_p] = (IL[idx_p] + I0[idx_p] - V[idx_p] * Gsh[idx_p]) / \
-            (Rs[idx_p] * Gsh[idx_p] + 1.) \
-            - (a[idx_p] / Rs[idx_p]) * lambertwterm
+        I = xp.where(idx_p,                                 # noqa: E741, N806
+                     (IL + I0 - V * Gsh) / (Rs * Gsh + 1.)
+                     - (a / Rs) * lambertwterm, I)
 
-    if output_is_scalar:
-        return I.item()
-    else:
-        return I
+    if not _xa.is_array_api_obj(I):
+        # neither solution applies to any element
+        I = I + xp.zeros_like(V + IL + I0 + Rs + Rsh + a)   # noqa: E741, N806
+    # asarray: NumPy arithmetic turns 0-d arrays into scalars
+    return xp.asarray(I)
 
 
 def _lambertw(photocurrent, saturation_current, resistance_series,

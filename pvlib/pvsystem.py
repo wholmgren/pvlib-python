@@ -20,6 +20,8 @@ from pvlib import (atmosphere, iam, inverter, irradiance,
                    singlediode as _singlediode, spectrum, temperature)
 from pvlib.tools import _build_kwargs, _build_args
 import pvlib.tools as tools
+from pvlib import _array_api as _xa
+import array_api_compat
 
 
 # a dict of required parameter names for each DC power model
@@ -2608,6 +2610,15 @@ def sapm_effective_irradiance(poa_direct, poa_diffuse, airmass_absolute, aoi,
     return Ee
 
 
+def _numpy_solver(xp, method):
+    # the other methods call SciPy's solvers, which stop when each element
+    # has converged, and so can't be compiled or differentiated
+    if not array_api_compat.is_numpy_namespace(xp):
+        raise ValueError(
+            f"method={method!r} needs NumPy arrays. Use method='lambertw' "
+            f'with arrays of {xp.__name__}.')
+
+
 def singlediode(photocurrent, saturation_current, resistance_series,
                 resistance_shunt, nNsVth, method='lambertw'):
     r"""
@@ -2684,6 +2695,12 @@ def singlediode(photocurrent, saturation_current, resistance_series,
 
         A dict is returned when the input parameters are scalars.
 
+    Raises
+    ------
+    TypeError
+        For arrays of libraries other than NumPy. See
+        :ref:`array-libraries-mpp` for the maximum power point with them.
+
     See also
     --------
     calcparams_desoto
@@ -2731,6 +2748,17 @@ def singlediode(photocurrent, saturation_current, resistance_series,
     """
     args = (photocurrent, saturation_current, resistance_series,
             resistance_shunt, nNsVth)  # collect args
+    xp = _xa.array_namespace(*args)
+    if not array_api_compat.is_numpy_namespace(xp):
+        # the maximum power point comes from a SciPy solver, which stops
+        # when each element has converged, and so can't be compiled or
+        # differentiated
+        raise TypeError(
+            'singlediode needs NumPy arrays, since it finds the maximum '
+            f'power point with SciPy, and got arrays of {xp.__name__}. '
+            'i_from_v and v_from_i accept them. "Maximum power point" in '
+            "the user guide's page on array libraries shows how to find "
+            "it with them and your library's solver.")
     # Calculate points on the IV curve using the LambertW solution to the
     # single diode equation
     if method.lower() == 'lambertw':
@@ -2840,8 +2868,12 @@ def max_power_point(photocurrent, saturation_current, resistance_series,
     return out
 
 
+@_xa.labeled_io(
+    name=None,
+    arrays=('current', 'photocurrent', 'saturation_current',
+            'resistance_series', 'resistance_shunt', 'nNsVth'))
 def v_from_i(current, photocurrent, saturation_current, resistance_series,
-             resistance_shunt, nNsVth, method='lambertw'):
+             resistance_shunt, nNsVth, method='lambertw', *, xp):
     '''
     Device voltage at the given device current for the single diode model.
 
@@ -2851,9 +2883,8 @@ def v_from_i(current, photocurrent, saturation_current, resistance_series,
     in which case the explict solution for voltage is used.
     Ideal device parameters are specified by resistance_shunt=np.inf and
     resistance_series=0.
-    Inputs to this function can include scalars and pandas.Series, but it is
-    the caller's responsibility to ensure that the arguments are all float64
-    and within the proper ranges.
+    It is the caller's responsibility to ensure that the arguments are
+    within the proper ranges.
 
     .. versionchanged:: 0.10.0
        The function's arguments have been reordered.
@@ -2896,7 +2927,8 @@ def v_from_i(current, photocurrent, saturation_current, resistance_series,
     method : str
         Method to use: ``'lambertw'``, ``'newton'``, ``'brentq'``, or
         ``'chandrupatla'``. *Note*: ``'brentq'`` is limited to
-        non-negative current.
+        non-negative current. Only ``'lambertw'`` works with arrays of
+        libraries other than NumPy, see :ref:`array_libraries`.
 
         .. note::
            ``'chandrupatla'`` requires scipy 1.15 or greater.
@@ -2904,7 +2936,7 @@ def v_from_i(current, photocurrent, saturation_current, resistance_series,
 
     Returns
     -------
-    current : np.ndarray or scalar
+    numeric
 
     References
     ----------
@@ -2915,8 +2947,9 @@ def v_from_i(current, photocurrent, saturation_current, resistance_series,
     args = (current, photocurrent, saturation_current,
             resistance_series, resistance_shunt, nNsVth)
     if method.lower() == 'lambertw':
-        return _singlediode._lambertw_v_from_i(*args)
+        return _singlediode._lambertw_v_from_i(*args, xp=xp)
     else:
+        _numpy_solver(xp, method)
         # Calculate points on the IV curve using either 'newton' or 'brentq'
         # methods. Voltages are determined by first solving the single diode
         # equation for the diode voltage V_d then backing out voltage
@@ -2927,8 +2960,12 @@ def v_from_i(current, photocurrent, saturation_current, resistance_series,
         return np.broadcast_to(V, shape)
 
 
+@_xa.labeled_io(
+    name=None,
+    arrays=('voltage', 'photocurrent', 'saturation_current',
+            'resistance_series', 'resistance_shunt', 'nNsVth'))
 def i_from_v(voltage, photocurrent, saturation_current, resistance_series,
-             resistance_shunt, nNsVth, method='lambertw'):
+             resistance_shunt, nNsVth, method='lambertw', *, xp):
     '''
     Device current at the given device voltage for the single diode model.
 
@@ -2938,9 +2975,8 @@ def i_from_v(voltage, photocurrent, saturation_current, resistance_series,
     in which case the explict solution for current is used.
     Ideal device parameters are specified by resistance_shunt=np.inf and
     resistance_series=0.
-    Inputs to this function can include scalars and pandas.Series, but it is
-    the caller's responsibility to ensure that the arguments are all float64
-    and within the proper ranges.
+    It is the caller's responsibility to ensure that the arguments are
+    within the proper ranges.
 
     .. versionchanged:: 0.10.0
        The function's arguments have been reordered.
@@ -2983,7 +3019,8 @@ def i_from_v(voltage, photocurrent, saturation_current, resistance_series,
     method : str
         Method to use: ``'lambertw'``, ``'newton'``, ``'brentq'``, or
         ``'chandrupatla'``. *Note*: ``'brentq'`` is limited to
-        non-negative current.
+        non-negative current. Only ``'lambertw'`` works with arrays of
+        libraries other than NumPy, see :ref:`array_libraries`.
 
         .. note::
            ``'chandrupatla'`` requires scipy 1.15 or greater.
@@ -2991,7 +3028,7 @@ def i_from_v(voltage, photocurrent, saturation_current, resistance_series,
 
     Returns
     -------
-    current : np.ndarray or scalar
+    numeric
 
     References
     ----------
@@ -3002,8 +3039,9 @@ def i_from_v(voltage, photocurrent, saturation_current, resistance_series,
     args = (voltage, photocurrent, saturation_current,
             resistance_series, resistance_shunt, nNsVth)
     if method.lower() == 'lambertw':
-        return _singlediode._lambertw_i_from_v(*args)
+        return _singlediode._lambertw_i_from_v(*args, xp=xp)
     else:
+        _numpy_solver(xp, method)
         # Calculate points on the IV curve using either 'newton' or 'brentq'
         # methods. Voltages are determined by first solving the single diode
         # equation for the diode voltage V_d then backing out voltage
@@ -3049,8 +3087,13 @@ def scale_voltage_current_power(data, voltage=1, current=1):
     return df_sorted
 
 
+@_xa.labeled_io(
+    name=lambda arguments: (
+        None if arguments['k'] is not None else _xa.labeled_io.INFER),
+    arrays=('effective_irradiance', 'temp_cell', 'pdc0', 'gamma_pdc',
+            'temp_ref', 'k'))
 def pvwatts_dc(effective_irradiance, temp_cell, pdc0, gamma_pdc, temp_ref=25.,
-               k=None, cap_adjustment=False):
+               k=None, cap_adjustment=False, *, xp):
     r"""
     Implement NLR's PVWatts (Version 5) DC power model.
 
@@ -3135,30 +3178,20 @@ def pvwatts_dc(effective_irradiance, temp_cell, pdc0, gamma_pdc, temp_ref=25.,
     # apply Marion's correction if k is provided
     if k is not None:
 
-        # preserve input types
-        index = pdc.index if isinstance(pdc, pd.Series) else None
-        is_scalar = np.isscalar(pdc)
-
         # calculate error adjustments
         err_1 = k * (1 - (1 - effective_irradiance / 200)**4)
         err_2 = k * (1000 - effective_irradiance) / (1000 - 200)
-        err = np.where(effective_irradiance <= 200, err_1, err_2)
+        err = xp.where(effective_irradiance <= 200, err_1, err_2)
 
         # cap adjustment, if needed
         if cap_adjustment:
-            err = np.where(effective_irradiance >= 1000, 0, err)
+            err = xp.where(effective_irradiance >= 1000, 0., err)
 
         # make error adjustment
         pdc = pdc - pdc0 * err
 
         # set negative power to zero
-        pdc = np.where(pdc < 0, 0, pdc)
-
-        # preserve input types
-        if index is not None:
-            pdc = pd.Series(pdc, index=index)
-        elif is_scalar:
-            pdc = float(pdc)
+        pdc = xp.where(pdc < 0, 0., pdc)
 
     return pdc
 

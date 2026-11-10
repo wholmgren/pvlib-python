@@ -91,10 +91,9 @@ def test_average_photon_energy_dataframe():
 
 
 def test_average_photon_energy_invalid_type():
-    # test that spectrum argument is either a pandas Series or dataframe
+    # other input than a pandas Series or DataFrame needs its wavelengths
     spectra = 5
-    with pytest.raises(TypeError, match='must be either a pandas Series or'
-                       ' DataFrame'):
+    with pytest.raises(ValueError, match='wavelength is required'):
         spectrum.average_photon_energy(spectra)
 
 

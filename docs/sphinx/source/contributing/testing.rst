@@ -75,6 +75,9 @@ It is also important to write tests that assert the return value of the
 function or that the function throws an exception when input data is
 beyond the range of algorithm validity.
 
+Functions that accept arrays from other libraries, such as PyTorch and JAX,
+have further tests, described in :ref:`array-libraries-testing`.
+
 
 PVSystem/Location
 ~~~~~~~~~~~~~~~~~

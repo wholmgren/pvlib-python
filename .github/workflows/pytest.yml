@@ -91,3 +91,41 @@ jobs:
           flags: core  # flags are configured in codecov.yml
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  array-libraries:
+    # Tests for other array libraries skip the libraries that aren't
+    # installed, so this job installs them all, on the CPU. SciPy reads
+    # SCIPY_ARRAY_API when imported; an empty value leaves its array API
+    # support off.
+    name: array libraries (SCIPY_ARRAY_API=${{ matrix.scipy-array-api || 'unset' }})
+    strategy:
+      fail-fast: false
+      matrix:
+        scipy-array-api: ['', '1']
+
+    runs-on: ubuntu-latest
+    env:
+      SCIPY_ARRAY_API: ${{ matrix.scipy-array-api }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install pvlib and array libraries
+        run: |
+          # CPU wheels: PyTorch's default Linux wheels include CUDA
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install .[test] array-api-strict "dask[array]" jax xarray
+          pip freeze
+
+      - name: Check that every array library imports
+        run: python -c "import array_api_strict, dask.array, jax, torch, xarray"
+
+      - name: Run tests
+        # -rs lists skipped tests, which should not include array libraries
+        run: pytest tests --ignore=tests/iotools -rs

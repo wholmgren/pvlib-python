@@ -10,7 +10,10 @@ on:
 
 jobs:
   quick-benchmarks:
-    runs-on: ubuntu-latest
+    # asv makes its environments with conda (benchmarks/asv.conf.json).
+    # The ubuntu-26.04 image, which ubuntu-latest is moving to, has no
+    # conda on the PATH
+    runs-on: ubuntu-24.04
     defaults: 
       run:
         shell: bash -el {0}

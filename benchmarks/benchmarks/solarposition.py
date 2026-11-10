@@ -17,7 +17,7 @@ else:
 
 
 class SolarPosition:
-    params = [1, 10, 100]  # number of days
+    params = [1, 10, 100, 365]  # number of days
     param_names = ['ndays']
 
     def setup(self, ndays):
@@ -38,6 +38,9 @@ class SolarPosition:
         solarposition.ephemeris(self.times_localized, self.lat, self.lon)
 
     def time_spa_python(self, ndays):
+        solarposition.spa_python(self.times_localized, self.lat, self.lon)
+
+    def peakmem_spa_python(self, ndays):
         solarposition.spa_python(self.times_localized, self.lat, self.lon)
 
     def time_pyephem(self, ndays):

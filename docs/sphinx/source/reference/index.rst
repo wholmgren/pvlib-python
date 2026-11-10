@@ -9,6 +9,7 @@ API reference
 
    classes
    solarposition
+   time
    clearsky
    airmass_atmospheric
    irradiance/index
