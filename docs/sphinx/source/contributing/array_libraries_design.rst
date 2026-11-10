@@ -26,6 +26,102 @@ Goals
 - **Small overhead** for the single calls that make up most pvlib use.
 
 
+.. _array-design-tiers:
+
+Tiers of support, and what each one decided
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The goals fall into five tiers, each a promise of its own to keep:
+
+#. **Arrays of the standard**, on any device, with pandas in and pandas out.
+#. **Labeled grids:** xarray in, xarray out.
+#. **Lazy and compiled arrays:** Dask without computing, and ``jax.jit``.
+#. **Gradients** with PyTorch and JAX.
+#. **Time series** models on arrays without an index, and on N-D data.
+
+The prototype goes through all five, with 36 functions, to find what each
+tier asks of the public API before any of it is released. The aim is that
+adding a tier later adds functions and tests, and doesn't change a signature
+or a result that users already rely on. This is why the design is larger
+than a first tier would need by itself.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 44 18 38
+
+   * - Decision
+     - Tier
+     - Seen by
+   * - ``xp`` is keyword-only and hidden; the core is ``f.core``
+     - 1
+     - contributors
+   * - array parameters are declared in ``arrays``
+     - 1
+     - contributors
+   * - one floating point dtype and one device per call; libraries don't mix
+     - 1
+     - users of other libraries
+   * - pandas is unwrapped, so indexes must be equal
+     - 1
+     - pandas users
+   * - time is a number in the core, and Unix seconds are float64
+     - 1
+     - users of other libraries
+   * - a core returns a dict, which becomes a DataFrame or a Dataset
+     - 1, 2
+     - contributors; a few return types changed
+   * - DataArrays get size-1 dimensions through ``apply_ufunc``
+     - 2
+     - nobody: it is how the boundary works
+   * - no in-place updates, value-dependent shapes or branches on values;
+       value checks go through ``known_any``
+     - 3
+     - contributors
+   * - excluded values are kept out of the calculation, with ``where_safe``
+     - 4
+     - contributors
+   * - an optional ``times``, and time on the last axis
+     - 5
+     - users of time series functions on arrays
+
+Two things follow from the table.
+
+**The tiers can be adopted one at a time.** Only tiers 1 and 5 put anything
+in a public signature or result, and tier 5 only adds an optional parameter
+to functions that took Series alone. A first contribution can be a few
+tier 1 functions; the ``arrays`` declaration and ``f.core`` it carries are
+what let the later tiers arrive without changing it.
+
+**Tiers 3 and 4 are rules for writing cores, not API.** Nothing of them
+shows in a signature, so they can be promised function by function. A
+function says in its entry in ``tests/_supported_functions.py`` what it
+promises, and the tests and the user guide follow that entry. Gradients are
+the tier that asks most of contributors, so they are promised by default
+and a function can decline, see :ref:`array-design-autodiff`.
+
+
+.. _array-design-always-on:
+
+Why support is always on
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+SciPy and scikit-learn make users turn array API support on. They keep
+their NumPy code path next to the new one, so the switch chooses between two
+behaviors, and existing users are untouched until they flip it.
+
+pvlib has one copy of each model. The boundary runs for NumPy and pandas
+input whether or not anyone passes another library's arrays, so a switch
+could only decide whether PyTorch or JAX arrays are accepted, and those
+mostly failed before. It would protect nobody, and would be global state for
+users to manage. SciPy describes its own switch as temporary.
+
+What a switch gives those projects is room to keep changing things. pvlib
+gets that by documenting input from libraries other than NumPy as
+experimental. It doesn't cover the changes that reach NumPy and pandas
+users, which no switch would hold back; they are listed under
+:ref:`array-design-open-questions`.
+
+
 .. _array-design-standard:
 
 Why the array API standard
@@ -368,6 +464,21 @@ frequency, it raised before.
 Why gradients and compilation shape the code
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+**Gradients are promised function by function, and by default.** The
+standard says nothing about differentiation, so finite gradients are a rule
+of pvlib's own, and they change how a core is written, not how it is called.
+A function could therefore be supported without them. They are still the
+default, for three reasons: gradients are a use raised in :issue:`2515`; a
+model chain is only differentiable if every function in it
+is; and the work is small when it is done while porting, since it is nearly
+always one of the two patterns below. A new entry in
+``tests/_supported_functions.py`` is tested for finite gradients with no
+further code, and a failure names the argument and the values that caused
+it. A function that can't have them, or whose core they would make hard to
+read, gives a reason in its entry (``gradients='...'``) and the user guide
+lists it. :py:func:`~pvlib.snow.fully_covered_nrel`, whose result is
+boolean, is the only one so far.
+
 **Double where.** Reverse-mode differentiation of ``xp.where(c, f(x), 0)``
 multiplies the derivative of ``f`` by zero where ``c`` is False, and
 0 × inf is NaN. ``_xa.where_safe`` gives ``f`` a safe value wherever ``c`` is
@@ -512,16 +623,31 @@ adopters, and both are still experimental.
      - common checks for estimators tagged ``array_api_support``
 
 
+.. _array-design-open-questions:
+
 Open questions
 ~~~~~~~~~~~~~~
 
+- **Changes for NumPy and pandas users.** These arrive with the port of a
+  function, whatever library its users pass, so each needs a whatsnew entry
+  and a decision on whether it needs a deprecation period first:
+
+  - pandas inputs with different indexes raise ``ValueError``; pandas
+    arithmetic aligned them and gave NaN where they differed;
+  - some results changed type or name, for example
+    :py:func:`~pvlib.clearsky.haurwitz`, which took only a Series and now
+    returns a dict for other input, and scalar calls, which return NumPy
+    scalars throughout;
+  - :py:func:`~pvlib.soiling.hsu` counts rain within 1e-9 mm of
+    ``cleaning_threshold`` as reaching it, and
+    :py:func:`~pvlib.snow.fully_covered_nrel` decides differently whether
+    to use the first snowfall, see :ref:`array-design-time-series`.
+
 - **Documenting support.** A decorator like SciPy's ``xp_capabilities``
-  could build the list of supported functions and libraries, and the test
-  marks, from one place.
-- **A switch.** SciPy and scikit-learn make users turn support on. pvlib
-  doesn't, since NumPy and pandas users get the same results apart from the
-  changes described above. Whether an experimental feature should still be
-  opt-in is open.
+  could build the list of supported functions and libraries, what each
+  promises (``jax.jit``, Dask, gradients), and the test marks, from one
+  place. Today the entry in ``tests/_supported_functions.py`` holds the
+  gradient promise, and tests keep the user guide in step with it.
 - **Special functions.** Drop pvlib's own dispatch once SciPy's support no
   longer needs ``SCIPY_ARRAY_API``.
 - **Increasing times.** :py:func:`~pvlib.soiling.hsu` raises for times that

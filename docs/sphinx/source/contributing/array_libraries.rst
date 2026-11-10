@@ -68,7 +68,8 @@ Porting a function
    ``aoi_projection.core(..., xp=xp)``.
 #. Add an entry for the function to ``SUPPORTED`` in
    ``tests/_supported_functions.py``, and benchmarks, see
-   :ref:`array-libraries-testing`.
+   :ref:`array-libraries-testing`. The entry also promises finite
+   gradients, unless it says why not; see :ref:`array-libraries-gradients`.
 #. Add the function to the list of supported functions in
    ``docs/sphinx/source/user_guide/modeling_topics/array_libraries.rst``. If
    only some of its models or methods are supported, say which. A test checks
@@ -167,7 +168,8 @@ boolean array either (``mask * x``); the standard doesn't allow it. In
 
 **Guard values a branch excludes.** ``xp.where`` computes both branches, and
 a gradient through the unused branch can still be NaN (:ref:`why
-<array-design-autodiff>`). Where a branch would divide by zero or take a
+<array-design-autodiff>`). This is what gradients need, see
+:ref:`array-libraries-gradients`. Where a branch would divide by zero or take a
 power of zero, use ``_xa.where_safe``, as :py:func:`~pvlib.inverter.pvwatts`
 does:
 
@@ -213,6 +215,52 @@ choice then works only with NumPy.
 `array-api-strict <https://data-apis.org/array-api-strict/>`_ library
 implements only the standard and raises on anything else, so running the
 tests with it finds most problems. See :ref:`array-libraries-testing`.
+
+
+.. _array-libraries-gradients:
+
+Gradients
+~~~~~~~~~
+
+Each supported function promises, by default, that PyTorch and JAX can
+differentiate it: its derivatives are finite wherever its arguments are.
+Users fit parameters and optimize designs through chains of functions, and
+one function with a NaN derivative breaks the chain.
+(:ref:`why <array-design-autodiff>`)
+
+You don't write a gradient test. The function's entry in ``SUPPORTED`` runs
+it through ``tests/test_array_api_gradients.py``, which fails with the
+argument and the values that gave a derivative that isn't finite. Put the
+values a branch excludes into the entry, such as a zenith past 90°, zero
+power or a NaN airmass, since that is where gradients break.
+
+Nearly every failure is one of two cases, both fixed with
+``_xa.where_safe`` as shown under :ref:`array-libraries-core`:
+
+- **a branch that is left out still computes inf or NaN:** a division by
+  zero or a fractional power of zero inside ``xp.where``. Compute it from a
+  safe value there:
+  ``_xa.where_safe(zeta != 0, zeta, lambda z: 0.0059 / z, 0., xp)``;
+- **a NaN input is masked after it is used:** the NaN airmass of night,
+  multiplied by something and then set to 0. Keep it out of the
+  calculation:
+  ``_xa.where_safe(~xp.isnan(am), am, lambda am: ..., xp.nan, xp)``.
+
+The values the function returns don't change, so the other tests need no
+changes.
+
+If a function can't have gradients, because its result is boolean or
+integer, or if the fix would make its core hard to follow, say so in its
+entry instead:
+
+.. code-block:: python
+
+    'snow.fully_covered_nrel': Supported(
+        {...}, gradients='its result is boolean'),
+
+The gradient tests then skip it, and it must be named in the Gradients
+section of the user guide, which a test checks. Prefer the fix: a function
+without gradients takes them from every model that calls it.
 
 
 .. _array-libraries-time:
@@ -272,7 +320,8 @@ through:
   checking that the function returns the type it was given and the values
   NumPy gives;
 - ``tests/test_array_api_gradients.py``: gradients with PyTorch and JAX,
-  which must be finite wherever the arguments are;
+  which must be finite wherever the arguments are, unless the entry gives a
+  reason in ``gradients``, see :ref:`array-libraries-gradients`;
 - ``tests/test_array_api_vs_main.py``: the same calls with Python, NumPy and
   pandas inputs must give what pvlib gave before the port. After adding an
   entry, record those results again with ``tests/_make_array_api_golden.py``,

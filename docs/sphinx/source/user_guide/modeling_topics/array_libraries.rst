@@ -228,6 +228,10 @@ functions. This model of a day's plane of array insolation uses JAX:
 
 On the summer solstice at 35° latitude, more tilt means less insolation.
 
+Gradients are promised function by function. pvlib's tests check them, with
+PyTorch and JAX, for every function in the list above except for
+:py:func:`~pvlib.snow.fully_covered_nrel`, whose result is boolean.
+
 Gradients are zero where a model is flat: where
 :py:func:`~pvlib.inverter.pvwatts` clips, where the sun is behind the module
 or below the horizon. They change abruptly at kinks such as the clearness

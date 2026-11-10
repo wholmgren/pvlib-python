@@ -1,11 +1,13 @@
 """
 Gradients through the supported functions are finite, with PyTorch and JAX.
 
-For each entry of _supported_functions, the derivatives of the finite
-outputs with respect to each array argument must be finite wherever that
-argument is. A nan that a function masks, such as the airmass of night,
-stays out of its values but not out of its derivatives (0 * nan) unless the
-function keeps it out of the calculation, with _array_api.where_safe.
+Gradients are promised function by function. An entry of
+_supported_functions promises them unless its ``gradients`` gives a reason
+not to. For each entry that does, the derivatives of the finite outputs with
+respect to each array argument must be finite wherever that argument is. A
+nan that a function masks, such as the airmass of night, stays out of its
+values but not out of its derivatives (0 * nan) unless the function keeps it
+out of the calculation, with _array_api.where_safe.
 """
 import numpy as np
 import pytest
@@ -22,14 +24,19 @@ def _differentiated(entry):
     return [k for k in entry.arrays if k not in entry.time]
 
 
-def _skip_boolean(case):
-    # a boolean result, such as snow.fully_covered_nrel's, has no gradient
-    entry = SUPPORTED[case]
-    out = function(case)(**{k: np.asarray(v) for k, v in entry.arrays.items()},
-                         **entry.params)
-    outputs = out.values() if isinstance(out, dict) else [out]
-    if all(np.asarray(o).dtype == bool for o in outputs):
-        pytest.skip('boolean result')
+def _skip_unpromised(case):
+    reason = SUPPORTED[case].gradients
+    if reason is not True:
+        pytest.skip(f'no gradients promised: {reason}')
+
+
+HOW_TO_FIX = (
+    'A branch that xp.where leaves out, or a nan that is masked later, '
+    'still reaches the derivative. Give the excluded values a safe input '
+    'with _array_api.where_safe; see "Gradients" in the contributing guide '
+    '(docs/sphinx/source/contributing/array_libraries.rst). If the function '
+    "can't have finite gradients, give the reason as gradients='...' in its "
+    'entry in tests/_supported_functions.py.')
 
 
 def _loss(out, xp):
@@ -43,15 +50,17 @@ def _check(case, values, gradients):
         if g is None:  # the outputs don't depend on it
             continue
         bad = ~np.isfinite(np.asarray(g)) & np.isfinite(np.asarray(x))
+        at = np.flatnonzero(bad).tolist()
         assert not bad.any(), (
             f'{case}: non-finite derivative with respect to {name} at '
-            f'positions {np.flatnonzero(bad).tolist()}')
+            f'positions {at}, where {name} is '
+            f'{np.asarray(x)[bad].tolist()}. {HOW_TO_FIX}')
 
 
 @pytest.mark.parametrize('case', list(SUPPORTED))
 def test_torch_gradients_are_finite(case):
     torch = _torch()
-    _skip_boolean(case)
+    _skip_unpromised(case)
     entry = SUPPORTED[case]
     names = _differentiated(entry)
     inputs = {k: torch.tensor(v, dtype=torch.float64,
@@ -67,7 +76,7 @@ def test_torch_gradients_are_finite(case):
 def test_jax_gradients_are_finite(case):
     jnp = _jax()
     import jax
-    _skip_boolean(case)
+    _skip_unpromised(case)
     entry = SUPPORTED[case]
     names = _differentiated(entry)
     fixed = {k: jnp.asarray(v) for k, v in entry.arrays.items()
@@ -81,6 +90,21 @@ def test_jax_gradients_are_finite(case):
     values = [jnp.asarray(entry.arrays[k]) for k in names]
     gradients = jax.grad(loss, argnums=tuple(range(len(names))))(*values)
     _check(case, values, gradients)
+
+
+def test_user_guide_lists_the_functions_without_gradients():
+    import pathlib
+    import re
+    from ._supported_functions import qualified_name
+    guide = (pathlib.Path(__file__).parents[1] / 'docs' / 'sphinx' / 'source'
+             / 'user_guide' / 'modeling_topics' / 'array_libraries.rst')
+    if not guide.exists():
+        pytest.skip('the docs are not here')
+    section = guide.read_text().split('\nGradients\n')[1]
+    sentence = section.split('except for')[1].split('\n\n')[0]
+    listed = set(re.findall(r':py:func:`~?(pvlib\.[\w.]+)`', sentence))
+    assert listed == {qualified_name(k) for k, entry in SUPPORTED.items()
+                      if entry.gradients is not True}
 
 
 # night (zenith 95°) makes the airmass nan

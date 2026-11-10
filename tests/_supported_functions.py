@@ -21,8 +21,8 @@ import numpy as np
 import pandas as pd
 
 Supported = collections.namedtuple(
-    'Supported', 'arrays params name time one_d',
-    defaults=({}, None, {}, ()))
+    'Supported', 'arrays params name time one_d gradients',
+    defaults=({}, None, {}, (), True))
 Supported.__doc__ = """
 arrays : dict
     The array arguments, four values each. Time parameters hold numbers:
@@ -38,6 +38,11 @@ one_d : tuple of str
     Parameters that must be series along time, never scalars, as for
     soiling.hsu. For these functions, the parameter that is in both ``time``
     and ``one_d`` is the time of the data (labeled_io's index_time).
+gradients : True or str
+    True, the default, promises finite gradients with PyTorch and JAX, which
+    test_array_api_gradients checks. A function that can't promise them
+    gives the reason instead, and the user guide's Gradients section lists
+    it.
 """
 
 KEEP = object()
@@ -145,7 +150,8 @@ SUPPORTED = {
     'snow.fully_covered_nrel': Supported(
         {'snowfall': [0., 4., 6., 1.], 'snow_depth': [2., 0.5, 3., 2.],
          'times': UNIX},
-        name=None, time={'times': 'unix'}, one_d=('snowfall', 'times')),
+        name=None, time={'times': 'unix'}, one_d=('snowfall', 'times'),
+        gradients='its result is boolean'),
     'snow.coverage_nrel': Supported(
         {'snowfall': [0., 4., 0., 4.],
          'poa_irradiance': [100., 600., 800., 0.],
