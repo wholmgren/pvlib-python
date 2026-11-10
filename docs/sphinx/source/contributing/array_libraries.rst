@@ -162,6 +162,7 @@ NumPy                                      In a core
 ``tools.cosd``, ``tools.sind``, ...        ``tools._cosd(x, xp)``, ``tools._sind(x, xp)``, ...
 ``np.errstate(...)``                       ``_xa.errstate(xp, ...)``
 ``scipy.special.erf``                      ``_xa.erf(x, xp)``
+``scipy.special.lambertw``                 ``ivtools.utils._lambertw_pvlib(x, xp)``
 =========================================  ==========================================
 
 For another special function, add a helper like ``_xa.erf``: it uses
@@ -178,55 +179,14 @@ handle. Compute everywhere and select with ``xp.where``. Don't multiply by a
 boolean array either (``mask * x``); the standard doesn't allow it. In
 ``xp.where``, at least one of the two values must be an array.
 
-**Guard values a branch excludes.** ``xp.where`` computes both branches, and
-a gradient through the unused branch can still be NaN (:ref:`why
-<array-design-autodiff>`). This is what gradients need, see
-:ref:`array-libraries-gradients`. Where a branch would divide by zero or take a
-power of zero, use ``_xa.where_safe``, as :py:func:`~pvlib.inverter.pvwatts`
-does:
-
-.. code-block:: python
-
-    # 0.0059 / zeta, but 0 where zeta == 0
-    zeta_term = _xa.where_safe(zeta != 0, zeta, lambda z: 0.0059 / z, 0., xp)
-
-The same goes for a NaN that marks an excluded case, such as the NaN airmass
-of night. Masking it after the calculation, as ``np.fmax(x, 0)`` does, keeps
-it out of the value but not out of the gradient, which gets ``0 * nan``. A
-function that combines airmass with other inputs computes with a safe
-airmass instead, as :py:func:`~pvlib.clearsky.ineichen` and
-:py:func:`~pvlib.atmosphere.get_absolute_airmass` do. Otherwise one night
-time step makes the gradient of a whole day NaN.
-
-**Don't branch on array values.** ``if x > 0``, ``bool(x)``, ``float(x)`` and
-``for v in x`` fail inside ``jax.jit`` and compute Dask arrays early. For an
-input check that raises, use ``_xa.known_any``, which skips the check when
-the values aren't known yet:
-
-.. code-block:: python
-
-    if _xa.known_any(a_r <= 0, xp):
-        raise ValueError("The parameter 'a_r' cannot be zero or negative.")
-
-Branching on strings, flags and None is fine. (:ref:`why
-<array-design-autodiff>`)
-
-**Create arrays from an input.** ``xp.zeros(n)`` has the library's default
-dtype, which is float32 in PyTorch, and the default device. Use
-``xp.zeros_like(x)``, or give ``dtype`` and ``device``. Python numbers in
-arithmetic, as in ``0.9 * x``, need no conversion.
-
-**Call cores, not public functions.** Calling ``aoi_projection(...)`` from a
-core works, but repeats the work of the boundary. Call
-``aoi_projection.core(..., xp=xp)`` and ``tools._cosd(x, xp)``. A core may
-call a function that isn't supported yet, as
-:py:func:`~pvlib.irradiance.get_sky_diffuse` does for the Perez model; that
-choice then works only with NumPy.
-
-**Check with array-api-strict.** The
-`array-api-strict <https://data-apis.org/array-api-strict/>`_ library
-implements only the standard and raises on anything else, so running the
-tests with it finds most problems. See :ref:`array-libraries-testing`.
+Computing every branch for every element can cost NumPy users time that
+masked assignment saved. Where a branch is expensive, skip it when no
+element takes it: ``if _xa.maybe_any(mask, xp):`` is True whenever the
+values aren't known yet, so ``jax.jit`` and Dask still get both branches.
+``pvlib.singlediode._lambertw_i_from_v`` is an example. An array whose
+elements take different branches still pays for both, so add an asv
+benchmark with such an array, like ``SingleDiodeBranches`` in
+``benchmarks/benchmarks/pvsystem.py``.
 
 
 .. _array-libraries-gradients:
@@ -384,7 +344,12 @@ Leave a function on NumPy if it
 
 - steps through time with a loop, as :py:func:`~pvlib.temperature.fuentes`
   does: the standard has no scan;
-- calls SciPy optimizers or root finders, as the single-diode functions do;
+- calls a SciPy optimizer or root finder, as
+  :py:func:`~pvlib.pvsystem.singlediode` does for the maximum power point.
+  pvlib doesn't write solvers of its own (:ref:`why <array-design-solvers>`).
+  Port the closed-form functions around the solver, so that users of other
+  libraries can apply their library's solver to them, and raise an error
+  for their arrays that says so, as ``singlediode`` does;
 - returns datetimes, as the sunrise and sunset functions do;
 - needs results whose shape depends on the data;
 - creates a dimension, as :py:func:`~pvlib.spectrum.spectrl2` does for
@@ -409,6 +374,8 @@ Helper reference
 .. autofunction:: is_concrete
 
 .. autofunction:: where_safe
+
+.. autofunction:: maybe_any
 
 .. autofunction:: errstate
 

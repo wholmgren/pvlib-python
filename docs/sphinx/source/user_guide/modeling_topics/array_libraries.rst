@@ -50,6 +50,10 @@ So far these functions accept arrays from other libraries:
   :py:func:`~pvlib.temperature.faiman`
 - power: :py:func:`~pvlib.pvsystem.pvwatts_dc`,
   :py:func:`~pvlib.inverter.pvwatts`
+- single diode model: :py:func:`~pvlib.pvsystem.i_from_v` and
+  :py:func:`~pvlib.pvsystem.v_from_i`, with ``method='lambertw'``, their
+  default. The other methods call SciPy's solvers and need NumPy arrays.
+  See :ref:`array-libraries-mpp` for the maximum power point
 - snow: :py:func:`~pvlib.snow.fully_covered_nrel`,
   :py:func:`~pvlib.snow.coverage_nrel`
 - soiling: :py:func:`~pvlib.soiling.hsu`
@@ -246,6 +250,55 @@ otherwise make the gradient of the whole day NaN.
 Input checks that need values, such as the check of ``a_r`` in
 :py:func:`~pvlib.iam.martin_ruiz`, are skipped inside ``jax.jit`` and for
 Dask arrays, whose values aren't known yet.
+
+
+.. _array-libraries-mpp:
+
+Maximum power point
+-------------------
+
+The current at a voltage and the voltage at a current of the single diode
+model have closed forms, so :py:func:`~pvlib.pvsystem.i_from_v` and
+:py:func:`~pvlib.pvsystem.v_from_i` work with every library. The maximum
+power point has none. pvlib finds it with a SciPy solver, which needs NumPy
+arrays, so :py:func:`~pvlib.pvsystem.singlediode` raises ``TypeError`` for
+arrays of other libraries.
+
+With another library, find it with that library's own solver. The power at
+a voltage is ``v * i_from_v(v, ...)``, and the library differentiates it.
+This example uses `Optimistix <https://docs.kidger.site/optimistix/>`_, a
+solver library for JAX, to find where the slope of the power curve is zero
+between short circuit and open circuit:
+
+.. code-block:: python
+
+    import jax
+    import jax.numpy as jnp
+    import optimistix as optx
+    from pvlib import pvsystem
+
+    def power(v, params):
+        return v * pvsystem.i_from_v(v, *params)
+
+    def max_power_point(params):
+        # for one IV curve; params are photocurrent, saturation_current,
+        # resistance_series, resistance_shunt and nNsVth
+        v_oc = pvsystem.v_from_i(0., *params)
+        solution = optx.root_find(
+            jax.grad(power), optx.Bisection(rtol=1e-12, atol=1e-12),
+            0.8 * v_oc, args=params, options={'lower': 0., 'upper': v_oc})
+        v_mp = solution.value
+        return v_mp, power(v_mp, params)
+
+    # for arrays of curves, compiled
+    params = (jnp.asarray([7., 5., 3.]), 1e-9 * jnp.ones(3), 0.3 * jnp.ones(3),
+              300. * jnp.ones(3), 1.5 * jnp.ones(3))
+    v_mp, p_mp = jax.jit(jax.vmap(max_power_point))(params)
+
+``jax.vmap`` applies the solver for one curve to each curve of the arrays.
+Optimistix differentiates the solution, not the iterations that found it,
+so ``jax.grad`` of a function of ``p_mp`` gives exact gradients with respect
+to the five parameters, for fitting them to measured power.
 
 SciPy
 -----

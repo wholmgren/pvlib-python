@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 from numpy.polynomial.polynomial import Polynomial as Poly
 
+from pvlib import _array_api as _xa
+
 
 # A small number used to decide when a slope is equivalent to zero
 EPS_slope = np.finfo('float').eps**(1/3)
@@ -546,12 +548,13 @@ def astm_e1036(v, i, imax_limits=(0.75, 1.15), vmax_limits=(0.75, 1.15),
     return result
 
 
-def _log_lambertw(logx):
+def _log_lambertw(logx, xp=np):
     r'''Computes W(x) starting from log(x).
 
     Parameters
     ----------
     logx : numeric
+    xp : array namespace, default numpy
 
     Returns
     -------
@@ -560,47 +563,67 @@ def _log_lambertw(logx):
 
     '''
     # handles overflow cases, but results in nan for x <= 1
-    w = logx - np.log(logx)  # initial guess, w = log(x) - log(log(x))
+    w = logx - xp.log(logx)  # initial guess, w = log(x) - log(log(x))
 
     for _ in range(0, 3):
         # Newton's. Halley's is not substantially faster or more accurate
         # because f''(w) = -1 / (w**2) is small for large w
-        w = w * (1. - np.log(w) + logx) / (1. + w)
+        w = w * (1. - xp.log(w) + logx) / (1. + w)
     return w
 
 
-def _lambertw_pvlib(x):
+def _lambertw_pvlib(x, xp=None, logx=None):
     r'''Lambert's W function principal branch, :math:`W_0(x)`, for
     :math:`x>=0`.
 
+    The number of iterations is fixed, so the function can be compiled
+    (``jax.jit``) and stays lazy with Dask, and its derivative from
+    automatic differentiation matches :math:`W/(x(1+W))` to rounding.
+
     Parameters
     ----------
-    x : float or np.array
+    x : float or array
         Must be real numbers.
+    xp : array namespace, optional
+        The namespace of ``x``. By default ``x`` is converted to a NumPy
+        array.
+    logx : array, optional
+        :math:`\log(x)`, used where ``x`` overflowed to infinity. Without
+        it, W of infinity is NaN.
 
     Returns
     -------
-    float or np.array
+    float or array
 
     '''
-    localx = np.asarray(x, float)
-    w = np.full_like(localx, np.nan)
-    small = localx <= 100
+    if xp is None:
+        xp = np
+        x = np.asarray(x, float)
+    small = x <= 100
+    large = x > 100  # False, like small, for NaN
+    # A method is evaluated for every x if it applies to any, with a
+    # harmless input where the other applies, so that neither the values
+    # nor the derivatives of the unused one are inf or NaN.
+    w = xp.full_like(x, xp.nan)  # where x is NaN
+
     # for large x, solve 0 = f(w) = w + log(w) - log(x) using Newton's
-    # w will contain nan for these numbers due to log(w) = log(log(x))
-    w[~small] = _log_lambertw(np.log(localx[~small]))
+    if _xa.maybe_any(large, xp):
+        overflow = xp.isinf(x)
+        log_x = xp.log(xp.where(large & ~overflow, x, 1e3))
+        log_x = xp.where(overflow, xp.inf if logx is None else logx, log_x)
+        w = xp.where(large, _log_lambertw(log_x, xp), w)
 
     # for small x, solve 0 = g(w) = w * exp(w) - x using Halley's method
-    if np.any(small):
-        z = localx[small]
-        temp = np.log1p(localx[small])
-        g = temp - np.log1p(temp)
+    if _xa.maybe_any(small, xp):
+        z = xp.where(small, x, 1.)
+        temp = xp.log1p(z)
+        g = temp - xp.log1p(temp)
         for _ in range(0, 3):
-            expg = np.exp(g)
+            expg = xp.exp(g)
             g_expg_z = g*expg - z
             g_p1 = g + 1
             g = g - g_expg_z * g_p1 / \
                 (expg * g_p1**2 - 0.5*(g + 2)*g_expg_z)
-        w[small] = g
+        w = xp.where(small, g, w)
 
-    return w[0] if w.shape == 1 else w
+    return w

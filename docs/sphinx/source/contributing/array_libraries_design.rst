@@ -40,7 +40,7 @@ The goals fall into five tiers, each a promise of its own to keep:
 #. **Dimensions with a coordinate:** time series and spectral models on
    arrays without labels, and on N-D data.
 
-The prototype goes through all five, with 36 functions, to find what each
+The prototype goes through all five, with 38 functions, to find what each
 tier asks of the public API before any of it is released. The aim is that
 adding a tier later adds functions and tests, and doesn't change a signature
 or a result that users already rely on. This is why the design is larger
@@ -81,6 +81,10 @@ than a first tier would need by itself.
    * - excluded values are kept out of the calculation, with ``where_safe``
      - 4
      - contributors
+   * - pvlib has no solver of its own: functions that need SciPy's stay on
+       NumPy
+     - 3, 4
+     - users of other libraries, who bring their library's solver
    * - an optional coordinate (``times``, ``wavelength``), and its
        dimension on the last axis
      - 5
@@ -605,6 +609,163 @@ and JAX's `sharp bits
 <https://docs.jax.dev/en/latest/notebooks/Common_Gotchas_in_JAX.html>`_.
 
 
+.. _array-design-solvers:
+
+Why pvlib has no solver of its own
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The single diode functions were explored to find out what an implicit
+equation asks of the design. The answer is a boundary between what pvlib
+ports and what it leaves to SciPy and to the solvers of other libraries.
+
+**Closed forms are ported.** :py:func:`~pvlib.pvsystem.i_from_v` and
+:py:func:`~pvlib.pvsystem.v_from_i` need only Lambert's W function, and
+pvlib already had its own W: three iterations of Halley's or Newton's method
+from a good first guess. A fixed three iterations compile and stay lazy as
+they are. The port replaced assignments to masked elements with
+``xp.where`` and safe inputs, and NumPy results are the same bit for bit.
+Automatic differentiation through the iterations gives the derivative
+:math:`W / (x (1 + W))` to 1e-13, since the iterations have converged. So W
+is a pvlib function that takes ``xp``, not a helper that dispatches to each
+library like ``_xa.erf``.
+
+**Computing both branches costs NumPy time.** With ``xp.where``, W's two
+methods (one for arguments up to 100, one above) and the diode equation's
+explicit and implicit solutions are computed for every element, where
+masked assignment computed each on its own elements. ``_xa.maybe_any``
+skips a branch that no element takes when values are known, so NumPy,
+PyTorch and eager JAX do no more work than before when all elements take
+the same branch, and ``jax.jit`` and Dask get both branches.
+
+It doesn't help an array whose elements take different branches. That is
+the usual case for :py:func:`~pvlib.pvsystem.v_from_i`, whose W arguments
+lie on both sides of 100 over a year, and it is 1.5 times slower on NumPy
+than before the port. The asv benchmarks ``SingleDiodeInputTypes`` and
+``SingleDiodeBranches`` track this, for 8,760 values:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - NumPy arrays
+     - before the port
+     - now
+   * - :py:func:`~pvlib.pvsystem.i_from_v`
+     - 0.34 ms
+     - 0.25 ms
+   * - :py:func:`~pvlib.pvsystem.v_from_i`
+     - 0.29 ms
+     - 0.43 ms
+   * - :py:func:`~pvlib.pvsystem.singlediode`
+     - 18.6 ms
+     - 16.3 ms
+
+:py:func:`~pvlib.pvsystem.singlediode` gains because it mostly calls
+:py:func:`~pvlib.pvsystem.i_from_v`. The way to get the 0.14 ms back is a
+second copy of W for NumPy that computes each method on its own elements,
+as before the port. It is left out: two copies of a numerical method must
+be kept equal, for a cost that is small next to anything that follows it
+in a model.
+
+**What needs a solver stays on NumPy.** The maximum power point has no
+closed form. :py:func:`~pvlib.pvsystem.singlediode` finds it with
+``scipy.optimize.elementwise.find_minimum``, and the ``'newton'``,
+``'brentq'`` and ``'chandrupatla'`` methods use SciPy too. These solvers
+iterate until each element has converged, a loop on values that ``jax.jit``
+and Dask can't run. With SciPy 1.18, ``find_minimum`` and ``find_root``
+
+- without ``SCIPY_ARRAY_API``, return NumPy arrays for PyTorch and JAX
+  arrays, and raise for a tensor that requires gradients and inside
+  ``jax.jit``;
+- with it, work for PyTorch and raise for JAX, whose arrays they assign to
+  in place.
+
+So :py:func:`~pvlib.pvsystem.singlediode` is unchanged for NumPy and
+pandas, in values and in types, and raises ``TypeError`` for other
+libraries, as the SciPy methods of :py:func:`~pvlib.pvsystem.i_from_v` and
+:py:func:`~pvlib.pvsystem.v_from_i` raise ``ValueError``. Both errors say
+what works instead.
+
+**Other libraries bring their own solver.** No solver library covers the
+standard: SciPy is the only one that follows it, and others, such as
+Optimistix for JAX, serve one library. They don't need to be pvlib's
+choice. With
+:py:func:`~pvlib.pvsystem.i_from_v` ported and differentiable, the power
+at a voltage is one line, the user's library differentiates it, and its
+solver finds the maximum. The user guide shows this with Optimistix
+(:ref:`array-libraries-mpp`): compiled, for arrays of curves, with exact
+gradients of the maximum power, since Optimistix differentiates the
+solution by the implicit function theorem. On 1,000 curves on a CPU it
+matches SciPy's power to 1e-15 and takes 3 ms where
+:py:func:`~pvlib.pvsystem.singlediode` takes 4 ms with NumPy. A test runs
+the example where Optimistix is installed; pvlib's CI doesn't install it.
+
+**Explored and not adopted: a solver in pvlib.** The exploration first
+replaced ``find_minimum`` for every library with a solver written against
+the standard. It is recorded here because it worked, and because the
+reasons not to ship it are about maintenance and not about results. The
+code below was removed with its two supports, the ``derivatives`` option of
+``_lambertw_i_from_v`` and ``_xa.stop_gradient``, and is no longer tested.
+
+.. code-block:: python
+
+    def _lambertw_mpp(v_oc, *params, xp):
+        # root of g = dP/dV = I + V dI/dV, which decreases with V
+        def slope(v, params):
+            i, di, d2i = _lambertw_i_from_v(v, *params, xp=xp,
+                                            derivatives=True)
+            return i + v * di, 2. * di + v * d2i
+
+        constants = [_xa.stop_gradient(p, xp) for p in params]
+        hi = _xa.stop_gradient(v_oc, xp)
+        lo = xp.zeros_like(hi)
+        v = 0.8 * hi
+        for _ in range(16):
+            g, dg = slope(v, constants)
+            lo = xp.where(g > 0., v, lo)
+            hi = xp.where(g > 0., hi, v)
+            step = v - g / dg
+            # Newton's step, or bisection if it leaves the bracket
+            v = xp.where((step >= lo) & (step <= hi), step, 0.5 * (lo + hi))
+        # one step that carries the derivatives of the solution
+        g, dg = slope(v, params)
+        return xp.where(hi > lo, v - g / _xa.stop_gradient(dg, xp), v)
+
+- *A fixed number of iterations* is what lets it compile and stay lazy.
+  For photocurrents of 0 to 12 A, saturation currents of 1e-13 to 1e-5 A,
+  series resistances of 0 to 2 ohm, shunt resistances from 3 ohm up and
+  ``nNsVth`` of 0.5 to 4 V, 10 iterations converged to rounding.
+- *On NumPy* it was 2.6 times as fast as ``find_minimum`` (8.6 ms rather
+  than 23 ms for 8,760 curves) and found the voltage to rounding rather
+  than to SciPy's relative tolerance of 1.5e-8, which changed ``v_mp``,
+  ``i_mp`` and ``i_xx`` by up to 2e-8 of their value.
+- *Gradients* were those of the solution. The iterations ran on constants,
+  and the last step, with g' held constant, has the derivative
+  −(∂g/∂p) / g' of the implicit function theorem. Differentiating through
+  the iterations would be wrong for the bisection steps and would keep all
+  of them in memory. This needed a ``stop_gradient`` helper that
+  dispatched by library, since the standard has nothing for it.
+- *Derivatives were written by hand,* dI/dV and d²I/dV², because the
+  standard has no automatic differentiation.
+
+It was not adopted because pvlib would own a numerical method: a fixed
+number of iterations can't report an element that didn't converge, nothing
+bounds its error outside the ranges tested, and each further solver
+(``bishop88``'s, with recombination and reverse breakdown) would need its
+own derivatives and its own evidence. pvlib is moving the other way,
+retiring its golden section search for SciPy's ``find_minimum``. The one
+thing only this solver offers, an exact maximum power point that compiles,
+JAX users get from Optimistix, and whatever SciPy adds for other libraries
+arrives without pvlib's work. The faster and tighter NumPy result is a case
+to make on its own, apart from array libraries.
+
+**Left as it is.** :py:func:`~pvlib.pvsystem.i_from_v` still returns NaN
+where the argument of W overflows (:issue:`298`);
+:py:func:`~pvlib.pvsystem.v_from_i` shows the fix, W from the log of its
+argument. The ``bishop88`` function itself is explicit arithmetic and could
+be ported; its solvers would stay on NumPy.
+
+
 .. _array-design-dispatch:
 
 Why some helpers dispatch by library
@@ -759,6 +920,9 @@ Open questions
     :py:func:`~pvlib.clearsky.haurwitz`, which took only a Series and now
     returns a dict for other input, and scalar calls, which return NumPy
     scalars throughout;
+  - :py:func:`~pvlib.pvsystem.i_from_v` and
+    :py:func:`~pvlib.pvsystem.v_from_i` return a Series for Series, where
+    they returned an array;
   - :py:func:`~pvlib.soiling.hsu` counts rain within 1e-9 mm of
     ``cleaning_threshold`` as reaching it, and
     :py:func:`~pvlib.snow.fully_covered_nrel` decides differently whether

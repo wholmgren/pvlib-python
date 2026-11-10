@@ -208,6 +208,17 @@ def known_any(cond, xp):
     return is_concrete(result) and bool(result)
 
 
+def maybe_any(cond, xp):
+    """
+    ``xp.any(cond)`` as a bool, or True if its value isn't known yet (see
+    :py:func:`known_any`). For skipping a branch that no value takes: the
+    libraries that compute now, NumPy most of all, save the work, and
+    ``jax.jit`` and Dask get both branches, selected with ``xp.where``.
+    """
+    result = xp.any(cond)
+    return not is_concrete(result) or bool(result)
+
+
 def errstate(xp, **kwargs):
     """``np.errstate`` for NumPy, a no-op for other libraries."""
     if array_api_compat.is_numpy_namespace(xp):

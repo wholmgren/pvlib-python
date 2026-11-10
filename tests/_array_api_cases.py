@@ -30,7 +30,8 @@ from pvlib import (atmosphere, clearsky, iam, inverter, irradiance, location,
                    pvsystem, snow, soiling, solarposition, temperature)
 
 from ._supported_functions import (SUPPORTED, INDEX, ZEN, AZI, TILT, SAZI,
-                                   DNI, GHI, DHI, TEMP, WIND, function)
+                                   DNI, GHI, DHI, TEMP, WIND, DIODE,
+                                   function)
 from .test_input_types import _convert
 
 Case = collections.namedtuple('Case', 'call policy requires',
@@ -50,6 +51,8 @@ KINDS = ['scalar', 'list', 'ndarray', 'series']
 CONTAINER_CHANGES = {
     'irradiance.get_extra_radiation[series]':
         'a Series of day of year gives a Series, not an ndarray',
+    'pvsystem.i_from_v[series]': 'Series give a Series, not an ndarray',
+    'pvsystem.v_from_i[series]': 'Series give a Series, not an ndarray',
 }
 
 LAT, LON = 32.2, -110.9
@@ -291,6 +294,13 @@ TRANSPOSITION_CASES = {
 AIRMASS_MODELS = ['simple', 'kasten1966', 'youngirvine1967', 'kastenyoung1989',
                   'gueymard1993', 'young1994', 'pickering2002',
                   'gueymard2003']
+
+
+def _singlediode(kind, method):
+    return pvsystem.singlediode(
+        *(_convert(kind, k, v) for k, v in DIODE.items()), method=method)
+
+
 OTHER_CASES = {
     **{f'get_relative_airmass[{m}]':
        functools.partial(atmosphere.get_relative_airmass,
@@ -328,6 +338,12 @@ OTHER_CASES = {
         np.array([2., np.nan, 3., 4.])),
     'Location.get_clearsky[ineichen]': lambda: location.Location(
         LAT, LON, altitude=700.).get_clearsky(HOURS[:24]),
+    # singlediode takes NumPy and pandas only, as before the port, but calls
+    # the ported i_from_v and v_from_i
+    **{f'singlediode[{kind}, {method}]': functools.partial(
+        _singlediode, kind, method)
+       for kind in ('scalar', 'ndarray', 'series')
+       for method in ('lambertw', 'newton')},
 }
 
 # --- inputs that must not be accepted silently ------------------------------

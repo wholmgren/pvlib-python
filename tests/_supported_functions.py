@@ -64,6 +64,14 @@ WIND = [1., 2., 3., 4.]
 ANGLES = {'surface_tilt': TILT, 'surface_azimuth': SAZI,
           'solar_zenith': ZEN, 'solar_azimuth': AZI}
 
+# single diode parameters: no series resistance, infinite shunt resistance
+# and no photocurrent each take another branch
+DIODE = {'photocurrent': [7., 5., 3., 0.],
+         'saturation_current': [1e-9, 5e-10, 2e-9, 1e-10],
+         'resistance_series': [0.3, 0.5, 0., 0.2],
+         'resistance_shunt': [300., np.inf, 400., 500.],
+         'nNsVth': [1.5, 1.6, 1.7, 1.8]}
+
 SUPPORTED = {
     'tools.cosd': Supported({'angle': ZEN}, name=KEEP),
     'tools.sind': Supported({'angle': ZEN}, name=KEEP),
@@ -120,6 +128,10 @@ SUPPORTED = {
     'pvsystem.pvwatts_dc(k)': Supported(
         {'effective_irradiance': GHI, 'temp_cell': TEMP},
         {'pdc0': 250., 'gamma_pdc': -0.004, 'k': 0.01}),
+    'pvsystem.i_from_v': Supported(
+        {'voltage': [0., 10., 20., 0.], **DIODE}, name=None),
+    'pvsystem.v_from_i': Supported(
+        {'current': [0., 2., 2.9, 0.], **DIODE}, name=None),
     'inverter.pvwatts': Supported(
         {'pdc': [0., 50., 150., 260.]}, {'pdc0': 240.}, name=KEEP),
     'iam.ashrae': Supported({'aoi': [0., 30., 60., 95.]}),
