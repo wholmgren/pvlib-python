@@ -139,6 +139,18 @@ def _mismatched(name, kinds):
                 and not XARRAY & set(kinds))
 
 
+# time series functions: the parameter that is the time of the data
+SERIES_TIME = {name: p for name, entry in SUPPORTED.items()
+               for p in entry.time if p in entry.one_d}
+
+
+def _unlabeled_time(name, kinds):
+    # DataArray data need a DataArray of times, whose dimension is time
+    time = SERIES_TIME.get(name)
+    return bool(time and kinds[time] not in XARRAY
+                and any(k in XARRAY for p, k in kinds.items() if p != time))
+
+
 def _expected_container(name, kinds):
     if XARRAY & set(kinds):
         return 'xarray'
@@ -202,6 +214,10 @@ def test_mixed_input_types(name, kinds):
         with pytest.raises(ValueError, match='different indexes'):
             func(**arguments, **other)
         return
+    if _unlabeled_time(name, kinds):
+        with pytest.raises(ValueError, match='must be a 1-D DataArray'):
+            func(**arguments, **other)
+        return
     reference = func(**{p: _reference_argument(kinds[p], values, category)
                         for p, (values, category) in params.items()},
                      **other)
@@ -231,11 +247,12 @@ def test_results_are_writable(name, kind):
     out = func(**{p: _argument(p, time_kind if values is None else kind,
                                values, category)
                   for p, (values, category) in params.items()}, **other)
+    # a zero of the result's dtype, which may be bool
     if isinstance(out, dict):
         for k in out:
-            out[k] += 0
+            out[k] += out[k].dtype.type(0)
     elif kind == 'xarray' and hasattr(out, 'data_vars'):
         for k in out.data_vars:
-            out[k] += 0
+            out[k] += out[k].dtype.type(0)
     else:
-        out += 0
+        out += out.dtype.type(0)

@@ -221,6 +221,145 @@ pandas exactly on 730,017 timestamps from 1700 to 2300.
 loop, so it handles irregular timestamps and keeps shapes fixed.
 
 
+.. _array-design-time-series:
+
+Why time series take time from one place
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Most models are elementwise: each time step stands alone. Time series
+models step through time. :py:func:`~pvlib.soiling.hsu` sums rain over a
+window and accumulates dust until it rains, and
+:py:func:`~pvlib.snow.coverage_nrel` accumulates the snow that has slid off
+since the last snowfall. They need the times, for the length of each step,
+and the direction of time in the data, to know what to accumulate along. A
+Series carries both in its index. A DataArray has dimension names but no
+rule for which one is time, and a NumPy or PyTorch array has neither.
+Before the port these functions took only Series.
+
+The design had to meet four requirements:
+
+- **No breaking changes.** pandas calls work as before.
+- **Arrays of any library,** plain NumPy and PyTorch included, since
+  gradients are much of the point of the port.
+- **N-D data,** such as many sites or orientations, in one call.
+- **One rule for every time series function,** not one per function.
+
+Four options were considered.
+
+**Labels only.** Time comes from the index of Series and from a dimension
+of DataArrays, as in pyet and xclim, which both use the one named
+``time``. This leaves out plain arrays, so
+NumPy, PyTorch and JAX users couldn't call these functions at all. Finding
+the dimension by name is also guesswork: MetPy matches dimension names
+against a regular expression (``time``, ``times``, ``xtime``, ...), and lets
+users override the match.
+
+**Required times.** Every function takes ``times`` for every input type,
+as NumPy and SciPy take numbers and an ``axis``. That is one rule with no
+guessing, but every pandas call of these functions would have to change.
+
+**A second function per model** for arrays, next to the Series one. Nothing
+breaks, but each model has two names and two docstrings to keep in step,
+and users choose by input type.
+
+**An optional times**, as :py:func:`~pvlib.clearsky.detect_clearsky` has
+(``times=None``), and :py:func:`~pvlib.scaling.wvm` for its time step
+(``dt=None``). Nothing breaks and each model keeps one function. pvlib uses
+this one, with the rules below.
+
+pvlib has removed optional ``times`` parameters before, to simplify its
+API. This one is different in two ways: only inputs without an index need
+it, and these functions didn't take such inputs before; and it can't
+disagree with an index.
+
+.. list-table:: Where other libraries get time
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Library
+     - Time comes from
+   * - pandas
+     - the index
+   * - pyet
+     - the index of Series, the ``time`` coordinate of DataArrays
+   * - xclim
+     - the DataArray dimension named ``time``
+   * - MetPy
+     - optional arguments, filled from DataArray coordinates found by name
+   * - statsmodels
+     - optional ``dates`` or ``freq``, filled from a pandas index
+   * - NumPy, SciPy
+     - numbers, and an ``axis`` argument
+   * - pvlib
+     - the index of Series, the dimension of a ``times`` DataArray, or
+       ``times`` along the last axis of other arrays
+
+None of them meets all four requirements: the libraries that read labels
+don't take plain arrays, and the ones that take numbers ask for them on
+every call.
+
+The rules
+---------
+
+**Series: the index,** as before the port. A ``times`` given as well must
+be the same instants, within 1 µs, or ``ValueError`` is raised, so there is
+never a second answer to what the time is. The usual mistake this catches
+is naive local times, which pvlib takes as UTC.
+
+**DataArrays: a DataArray of times.** Its dimension is time, wherever that
+dimension is in the data, and ``times=da.time`` is all it takes. DataArray
+data with ``times`` missing, or given as an unlabeled array or a
+DatetimeIndex, raise ``ValueError``. There is no fallback to a dimension
+named ``time``, which would be guessing by name, or to the last position:
+the order of dimensions inside the call follows the arguments, not the way
+the user laid out the data.
+
+**Anything else: times along the last axis.** ``times`` is required and
+1-D. The last axis of each array argument has its length, or length 1 for
+values that are constant in time, such as a tilt for each site. Other
+lengths raise ``ValueError``, which catches most data laid out with time
+first; square data can't be caught.
+
+The boundary moves the time dimension of DataArrays to the last axis too,
+with ``input_core_dims`` in :py:func:`xarray.apply_ufunc`, so the core
+always gets time last and is written once, with ``axis=-1``. Results have
+time last as well.
+
+**Why the last axis.** SciPy's signal and integration functions, which it
+has ported to the standard, work along the last axis by default
+(``cumulative_trapezoid``, ``savgol_filter``, ``lfilter``), as does the
+standard's ``diff``, and :py:func:`xarray.apply_ufunc` puts core dimensions
+last. The cost is that a DataFrame's values have time first, so they need a
+transpose, and a value for each site needs a last axis of size 1,
+``tilt[:, None]``, where with time first it would broadcast as it is. Time
+first would suit DataFrame users, but set pvlib apart from SciPy and
+xarray.
+
+**No axis parameter.** It would add a parameter to every time series
+function for a choice that ``.T`` or ``moveaxis`` already makes, and
+DataArray users name the dimension instead. It can be added later without
+breaking calls.
+
+**One times for all sites.** ``times`` is 1-D, so the sites of an N-D call
+share their timestamps; sites with different timestamps need separate
+calls, or data reindexed onto common times. ``_xa.rolling_sum`` searches
+one array of times for all sites.
+
+**Forward fills of N-D data.** The standard's ``searchsorted`` is 1-D, and
+:py:func:`~pvlib.snow.coverage_nrel` and :py:func:`~pvlib.soiling.hsu` look
+up, for each time, the latest snowfall or cleaning. ``_xa.take_last`` adds
+row × (n + 1) to each row's running count of events, n being the number of
+times, which makes all rows one increasing 1-D array for a single
+``searchsorted``. Shapes stay fixed, so it works inside ``jax.jit`` and on
+Dask.
+
+**Changes from before the port.** :py:func:`~pvlib.snow.fully_covered_nrel`
+used the first snowfall if pandas could infer a frequency from the index,
+and now uses it if all time steps are equally long: the same answer for the
+sub-daily data the model is for. With two times, where pandas can't infer a
+frequency, it raised before.
+
+
 .. _array-design-autodiff:
 
 Why gradients and compilation shape the code
@@ -382,6 +521,17 @@ Open questions
   opt-in is open.
 - **Special functions.** Drop pvlib's own dispatch once SciPy's support no
   longer needs ``SCIPY_ARRAY_API``.
+- **Increasing times.** :py:func:`~pvlib.soiling.hsu` raises for times that
+  go back, as pandas' ``rolling`` did; the snow model, as before the port,
+  doesn't check. A check in the boundary would make all time series
+  functions agree.
+- **The other time series functions.** :py:func:`~pvlib.soiling.kimber`
+  and :py:func:`~pvlib.temperature.prilliman` take time from the index and
+  would get the same ``times`` when ported;
+  :py:func:`~pvlib.temperature.fuentes` also needs a scan, which the
+  standard lacks. :py:func:`~pvlib.clearsky.detect_clearsky` and
+  :py:func:`~pvlib.scaling.wvm` already have optional time parameters, which
+  porting would bring under these rules.
 
 
 References

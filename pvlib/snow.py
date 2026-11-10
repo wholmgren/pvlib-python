@@ -4,31 +4,25 @@ associated effects on PV module output
 """
 
 import numpy as np
-import pandas as pd
 
-from pvlib.tools import (
-    _pandas_infer_freq_BaseOffset_transition_handler,
-    cosd,
-    sind,
-    tand,
-)
+from pvlib import _array_api as _xa
+from pvlib.tools import _sind, cosd, tand
 
 
-def _time_delta_in_hours(times):
-    delta = times.to_series().diff()
-    return delta.dt.total_seconds().div(3600)
-
-
+@_xa.labeled_io(name=None,
+                arrays=('snowfall', 'snow_depth', 'threshold_snowfall',
+                        'threshold_depth', 'times'),
+                time={'times': 'unix'}, index_time='times')
 def fully_covered_nrel(snowfall, snow_depth=None, threshold_snowfall=1.,
-                       threshold_depth=1.):
+                       threshold_depth=1., times=None, *, xp):
     '''
     Calculates the timesteps when modules are fully covered by snow.
 
     Parameters
     ----------
-    snowfall: Series
+    snowfall: Series, array or DataArray
         Snowfall in each time period. [cm]
-    snow_depth: Series, optional
+    snow_depth: Series, array or DataArray, optional
         Snow depth on the ground at the beginning of each time period.
         Must have the same index as ``snowfall``. [cm]
     threshold_snowfall: float, default 1.0
@@ -36,12 +30,19 @@ def fully_covered_nrel(snowfall, snow_depth=None, threshold_snowfall=1.,
         [cm/hr]
     threshold_depth: float, default 1.0
         Snow depth on the ground, above which snow can affect the modules. [cm]
+    times : DatetimeIndex, array or DataArray, optional
+        Times of the data, increasing. Leave it out for Series: their index
+        is the time. Otherwise it is required and 1-D, as datetimes or as
+        float64 seconds since 1970-01-01 00:00 UTC: a DataArray, such as
+        ``da.time``, for DataArray data, whose dimension is time, and for
+        other arrays one along their last axis. See
+        :ref:`array-libraries-time-series`.
 
     Returns
     ----------
-    covered: Series
-        A Series of boolean, True where the snowfall exceeds the defined
-        threshold to fully cover the panel.
+    covered: Series, array or DataArray
+        Boolean, True where the snowfall exceeds the defined threshold to
+        fully cover the panel.
 
     Notes
     -----
@@ -50,6 +51,9 @@ def fully_covered_nrel(snowfall, snow_depth=None, threshold_snowfall=1.,
     ``snow_depth`` is used to return `False` (not fully covered) when snow
     is less than ``threshold_depth``. This check is described in [2]_ as needed
     for systems with low tilt angle.
+
+    The first snowfall value is used only if all time steps are equally
+    long, since the length of the step before it is unknown.
 
     References
     ----------
@@ -60,27 +64,34 @@ def fully_covered_nrel(snowfall, snow_depth=None, threshold_snowfall=1.,
        of a PV Snow Coverage Model in SAM" (2017) NREL Technical Report
        NREL/TP-6A20-68705
     '''
-    timestep = _time_delta_in_hours(snowfall.index)
-    hourly_snow_rate = snowfall / timestep
-    # if we can infer a time frequency, use first snowfall value
-    # otherwise the first snowfall value is ignored
-    freq = _pandas_infer_freq_BaseOffset_transition_handler(snowfall.index)
-    if freq is not None:
-        timedelta = pd.tseries.frequencies.to_offset(freq) / pd.Timedelta('1h')
-        hourly_snow_rate.iloc[0] = snowfall.iloc[0] / timedelta
-    else:  # can't infer frequency from index
-        hourly_snow_rate.iloc[0] = 0  # replaces NaN
-    covered = (hourly_snow_rate > threshold_snowfall)
+    # times is Unix seconds along the last axis, from labeled_io
+    if times.shape[0] < 2:
+        raise ValueError('at least two times are needed for the length of '
+                         'the time steps')
+    hours = xp.diff(times) / 3600.
+    # if all steps are equal, the step before the first is taken to be too,
+    # as a pandas frequency would; otherwise the first snowfall is ignored
+    regular = xp.all(hours == hours[:1])
+    first = xp.where(regular, snowfall[..., :1] / hours[:1], 0.)
+    hourly_snow_rate = xp.concat([first, snowfall[..., 1:] / hours], axis=-1)
+    covered = hourly_snow_rate > threshold_snowfall
     # no coverage when no snow on the ground
     if snow_depth is not None:
         covered = covered & (snow_depth >= threshold_depth)
     return covered
 
 
+@_xa.labeled_io(name=None,
+                arrays=('snowfall', 'poa_irradiance', 'temp_air',
+                        'surface_tilt', 'snow_depth', 'initial_coverage',
+                        'threshold_snowfall', 'threshold_depth',
+                        'can_slide_coefficient', 'slide_amount_coefficient',
+                        'times'),
+                time={'times': 'unix'}, index_time='times')
 def coverage_nrel(snowfall, poa_irradiance, temp_air, surface_tilt,
                   snow_depth=None, initial_coverage=0, threshold_snowfall=1.,
                   threshold_depth=1., can_slide_coefficient=-80.,
-                  slide_amount_coefficient=0.197):
+                  slide_amount_coefficient=0.197, times=None, *, xp):
     '''
     Calculates the fraction of the slant height of a row of modules that is
     covered by snow at every time step.
@@ -92,16 +103,16 @@ def coverage_nrel(snowfall, poa_irradiance, temp_air, surface_tilt,
 
     Parameters
     ----------
-    snowfall : Series
+    snowfall : Series, array or DataArray
         Snowfall within each time period. [cm]
-    poa_irradiance : Series
+    poa_irradiance : Series, array or DataArray
         Total in-plane irradiance [W/m^2]
-    temp_air : Series
+    temp_air : Series, array or DataArray
         Ambient air temperature [C]
     surface_tilt : numeric
         Tilt of module's from horizontal, e.g. surface facing up = 0,
         surface facing horizon = 90. [degrees]
-    snow_depth : Series, optional
+    snow_depth : Series, array or DataArray, optional
         Snow depth on the ground at the beginning of each time period.
         Must have the same index as ``snowfall``. [cm]
     initial_coverage : float, default 0
@@ -118,10 +129,17 @@ def coverage_nrel(snowfall, poa_irradiance, temp_air, surface_tilt,
     slide_amount_coefficient : float, default 0.197
         Coefficient to determine fraction of snow that slides off in one hour.
         [unitless]
+    times : DatetimeIndex, array or DataArray, optional
+        Times of the data, increasing. Leave it out for Series: their index
+        is the time. Otherwise it is required and 1-D, as datetimes or as
+        float64 seconds since 1970-01-01 00:00 UTC: a DataArray, such as
+        ``da.time``, for DataArray data, whose dimension is time, and for
+        other arrays one along their last axis. See
+        :ref:`array-libraries-time-series`.
 
     Returns
     -------
-    snow_coverage : Series
+    snow_coverage : Series, array or DataArray
         The fraction of the slant height of a row of modules that is covered
         by snow at each time step.
 
@@ -145,41 +163,43 @@ def coverage_nrel(snowfall, poa_irradiance, temp_air, surface_tilt,
     '''
 
     # find times with new snowfall
-    new_snowfall = fully_covered_nrel(snowfall, snow_depth, threshold_snowfall,
-                                      threshold_depth)
-
-    # set up output Series
-    snow_coverage = pd.Series(np.nan, index=poa_irradiance.index)
+    new_snowfall = fully_covered_nrel.core(
+        snowfall, snow_depth, threshold_snowfall, threshold_depth, times,
+        xp=xp)
 
     # determine amount that snow can slide in each timestep
     can_slide = temp_air > poa_irradiance / can_slide_coefficient
-    slide_amt = slide_amount_coefficient * sind(surface_tilt) * \
-        _time_delta_in_hours(poa_irradiance.index)
-    slide_amt[~can_slide] = 0.
-    # don't slide during snow events
-    slide_amt[new_snowfall] = 0.
-    # don't slide in the interval preceding the snowfall data
-    slide_amt.iloc[0] = 0
+    hours = xp.diff(times) / 3600.
+    hours = xp.concat([xp.zeros_like(hours[:1]), hours])
+    slide_amt = slide_amount_coefficient * _sind(surface_tilt, xp) * hours
+    # no slide when snow can't slide, during snow events, or in the interval
+    # preceding the snowfall data
+    not_first = xp.concat([xp.zeros_like(times[:1]),
+                           xp.ones_like(times[1:])]) > 0
+    slide_amt = xp.where(can_slide & ~new_snowfall & not_first, slide_amt, 0.)
 
     if snow_depth is not None:
         # All slides off if snow on the ground is less than threshold_depth.
         # Described in [2] to avoid non-sliding snow for low-tilt systems.
         # Default threshold_depth of 1cm is from [2[ and SAM's implementation.
         # https://github.com/NatLabRockies/ssc/issues/1265
-        slide_amt[snow_depth < threshold_depth] = 1.
+        slide_amt = xp.where(snow_depth < threshold_depth, 1., slide_amt)
 
-    # build time series of cumulative slide amounts
-    sliding_period_ID = new_snowfall.cumsum()
-    cumulative_sliding = slide_amt.groupby(sliding_period_ID).cumsum()
+    # cumulative slide amounts, restarting at each snowfall. slide_amt is 0
+    # at snowfall steps, so that is the running total less its value at the
+    # latest snowfall. Missing values are skipped, as pandas' cumsum does
+    missing = xp.isnan(slide_amt)
+    total = xp.cumulative_sum(xp.where(missing, 0., slide_amt), axis=-1)
+    cumulative_sliding = total - _xa.take_last(total, new_snowfall, xp)
 
-    # set up time series of snow coverage without any sliding applied
-    snow_coverage[new_snowfall] = 1.0
-    if np.isnan(snow_coverage.iloc[0]):
-        snow_coverage.iloc[0] = initial_coverage
-    snow_coverage = snow_coverage.ffill()
-    snow_coverage -= cumulative_sliding
+    # snow coverage without any sliding: 1 from the first snowfall on, and
+    # initial_coverage before it
+    snowed = xp.cumulative_sum(xp.astype(new_snowfall, total.dtype),
+                               axis=-1) > 0
+    snow_coverage = xp.where(snowed, 1., initial_coverage) - cumulative_sliding
+    snow_coverage = xp.where(missing, xp.nan, snow_coverage)
 
-    return snow_coverage.clip(lower=0)
+    return xp.clip(snow_coverage, min=0.)
 
 
 def dc_loss_nrel(snow_coverage, num_strings):

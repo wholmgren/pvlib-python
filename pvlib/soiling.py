@@ -32,7 +32,7 @@ def hsu(rainfall, cleaning_threshold, surface_tilt, pm2_5, pm10,
     Parameters
     ----------
 
-    rainfall : Series or array
+    rainfall : Series, array or DataArray
         Rain accumulated in each time period. [mm]
 
     cleaning_threshold : float
@@ -58,14 +58,17 @@ def hsu(rainfall, cleaning_threshold, surface_tilt, pm2_5, pm10,
         It is recommended that `rain_accum_period` be between 1 hour and
         24 hours. A number is in seconds.
 
-    times : DatetimeIndex or array, optional
-        Times of ``rainfall``, increasing. Taken from the index of
-        ``rainfall`` if it is a Series; required otherwise. A numeric array
-        is seconds since 1970-01-01 00:00 UTC, integer or float64.
+    times : DatetimeIndex, array or DataArray, optional
+        Times of the data, increasing. Leave it out for Series: their index
+        is the time. Otherwise it is required and 1-D, as datetimes or as
+        float64 seconds since 1970-01-01 00:00 UTC: a DataArray, such as
+        ``da.time``, for DataArray data, whose dimension is time, and for
+        other arrays one along their last axis. See
+        :ref:`array-libraries-time-series`.
 
     Returns
     -------
-    soiling_ratio : Series or array
+    soiling_ratio : Series, array or DataArray
         Values between 0 and 1. Equal to 1 - transmission loss.
 
     Notes
@@ -96,8 +99,8 @@ def hsu(rainfall, cleaning_threshold, surface_tilt, pm2_5, pm10,
     if depo_veloc is None:
         depo_veloc = {'2_5': 0.0009, '10': 0.004}
 
-    # times is seconds since 1970-01-01 UTC and rain_accum_period is
-    # seconds, from labeled_io
+    # times is seconds since 1970-01-01 UTC along the last axis of the
+    # data, and rain_accum_period is seconds, from labeled_io
 
     # pandas rolling raises for an unsorted index; the window sums below
     # would be silently wrong
@@ -127,7 +130,7 @@ def hsu(rainfall, cleaning_threshold, surface_tilt, pm2_5, pm10,
 
     # tms -> tilt_mass_rate
     mass_no_cleaning = xp.cumulative_sum(
-        tilted_mass_rate + xp.zeros_like(rainfall))
+        tilted_mass_rate + xp.zeros_like(rainfall), axis=-1)
     # each cleaning removes all the mass accumulated up to that time
     mass_removed = _xa.take_last(mass_no_cleaning, cleaning, xp=xp)
     accum_mass = mass_no_cleaning - mass_removed

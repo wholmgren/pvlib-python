@@ -35,7 +35,9 @@ name : str, None or KEEP
 time : dict
     Parameters that also take datetimes: 'doy' or 'unix'.
 one_d : tuple of str
-    Parameters that must be 1-D series along time, as for soiling.hsu.
+    Parameters that must be series along time, never scalars, as for
+    soiling.hsu. For these functions, the parameter that is in both ``time``
+    and ``one_d`` is the time of the data (labeled_io's index_time).
 """
 
 KEEP = object()
@@ -138,6 +140,19 @@ SUPPORTED = {
          'pm10': [2e-2, 2.5e-2, 3e-2, 3.5e-2]},
         {'cleaning_threshold': 1.0, 'surface_tilt': 20.},
         time={'times': 'unix'}, one_d=('rainfall', 'times')),
+    # 3 hour steps: snowfall above 3 cm covers. Snow depth below 1 cm stops
+    # coverage, and makes all the snow slide off
+    'snow.fully_covered_nrel': Supported(
+        {'snowfall': [0., 4., 6., 1.], 'snow_depth': [2., 0.5, 3., 2.],
+         'times': UNIX},
+        name=None, time={'times': 'unix'}, one_d=('snowfall', 'times')),
+    'snow.coverage_nrel': Supported(
+        {'snowfall': [0., 4., 0., 4.],
+         'poa_irradiance': [100., 600., 800., 0.],
+         'temp_air': [-5., 2., 3., -2.], 'surface_tilt': TILT,
+         'snow_depth': [5., 5., 5., 0.5], 'times': UNIX},
+        {'initial_coverage': 0.5}, name=None, time={'times': 'unix'},
+        one_d=('snowfall', 'times')),
 }
 
 

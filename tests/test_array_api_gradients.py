@@ -22,6 +22,16 @@ def _differentiated(entry):
     return [k for k in entry.arrays if k not in entry.time]
 
 
+def _skip_boolean(case):
+    # a boolean result, such as snow.fully_covered_nrel's, has no gradient
+    entry = SUPPORTED[case]
+    out = function(case)(**{k: np.asarray(v) for k, v in entry.arrays.items()},
+                         **entry.params)
+    outputs = out.values() if isinstance(out, dict) else [out]
+    if all(np.asarray(o).dtype == bool for o in outputs):
+        pytest.skip('boolean result')
+
+
 def _loss(out, xp):
     outputs = out.values() if isinstance(out, dict) else [out]
     return sum(xp.sum(xp.where(xp.isfinite(o), o, 0.)) for o in outputs)
@@ -41,6 +51,7 @@ def _check(case, values, gradients):
 @pytest.mark.parametrize('case', list(SUPPORTED))
 def test_torch_gradients_are_finite(case):
     torch = _torch()
+    _skip_boolean(case)
     entry = SUPPORTED[case]
     names = _differentiated(entry)
     inputs = {k: torch.tensor(v, dtype=torch.float64,
@@ -56,6 +67,7 @@ def test_torch_gradients_are_finite(case):
 def test_jax_gradients_are_finite(case):
     jnp = _jax()
     import jax
+    _skip_boolean(case)
     entry = SUPPORTED[case]
     names = _differentiated(entry)
     fixed = {k: jnp.asarray(v) for k, v in entry.arrays.items()

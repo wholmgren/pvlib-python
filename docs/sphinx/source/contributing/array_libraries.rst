@@ -105,9 +105,15 @@ The decorator
     seconds.
 
 ``index_time``
-    A time parameter that defaults to None and is then taken from the index
-    of the first Series argument, as ``times`` is in
-    :py:func:`~pvlib.soiling.hsu`. List it in ``time`` too.
+    For time series functions, which take time from the index of their
+    Series: the ``times`` parameter, as in :py:func:`~pvlib.soiling.hsu`.
+    Add it last, as ``times=None``, list it in ``time`` too, and copy its
+    docstring from :py:func:`~pvlib.soiling.hsu`. The boundary takes time from
+    the index of Series, from the dimension of a ``times`` DataArray, or from
+    ``times`` along the last axis of other arrays, and raises if it is
+    missing or disagrees with the index; the core gets it on the last axis.
+    See :ref:`array-libraries-time`.
+    (:ref:`why <array-design-time-series>`)
 
 The core must return an array, a dict of arrays or a tuple of arrays. The
 boundary makes a dict into a DataFrame for pandas input and a Dataset for
@@ -234,6 +240,13 @@ seconds. Declare them with ``time={'x': 'unix'}``: the boundary then
 converts them to float64 apart from the other arrays and raises
 ``TypeError`` for float32. (:ref:`why <array-design-time>`)
 
+A time series function, declared with ``index_time``, gets ``times`` as
+1-D Unix seconds and its data with time on the last axis, whatever the
+input type. Write the core for N-D data: pass ``axis=-1`` to
+``cumulative_sum`` and the other functions that take an axis, index time
+with ``x[..., i]``, and broadcast against ``xp.diff(times)``. The helpers
+above all work along the last axis.
+
 
 .. _array-libraries-testing:
 
@@ -243,7 +256,8 @@ Testing
 Add an entry for the function to ``SUPPORTED`` in
 ``tests/_supported_functions.py``. It gives the function's array arguments,
 with four values each, its other arguments, the name of a Series result,
-the parameters that also take datetimes, and those that must be 1-D series.
+the parameters that also take datetimes, and those that must be series
+along time, never scalars.
 Include values that reach the branches the function excludes, such as a
 zenith below the horizon or a NaN airmass. The entry runs the function
 through:
@@ -275,7 +289,10 @@ Add tests of your own where the function needs them:
 - a function with ``known_any``: that the check raises for eager JAX arrays
   and is skipped inside ``jax.jit``, like
   ``test_martin_ruiz_validates_eager_jax_but_not_traced``;
-- a function that takes time: tests in ``tests/test_array_api_time.py``.
+- a function that takes time: tests in ``tests/test_array_api_time.py``;
+- a time series function: an entry in ``FUNCTIONS`` in
+  ``tests/test_array_api_time_series.py``, which runs it on data for several
+  sites and checks each site against Series input.
 
 A CI job, ``array libraries`` in ``.github/workflows/pytest.yml``, installs
 these libraries and runs the whole test suite twice: with SciPy's array API

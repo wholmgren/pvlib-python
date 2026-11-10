@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 
 from pvlib import (atmosphere, clearsky, iam, inverter, irradiance, location,
-                   pvsystem, soiling, solarposition, temperature)
+                   pvsystem, snow, soiling, solarposition, temperature)
 
 from ._supported_functions import (SUPPORTED, INDEX, ZEN, AZI, TILT, SAZI,
                                    DNI, GHI, DHI, TEMP, WIND, function)
@@ -41,7 +41,8 @@ Case = collections.namedtuple('Case', 'call policy requires',
 # functions got wrong then (inverter.pvwatts gave NaN at zero power);
 # test_input_types compares masked arrays with NumPy arrays. Functions that
 # take numbers as Unix seconds are left out too: before the port, numbers
-# were nanoseconds. SPA_CASES and HSU_CASES compare them with datetimes
+# were nanoseconds. SPA_CASES, HSU_CASES and SNOW_CASES compare them with
+# datetimes
 KINDS = ['scalar', 'list', 'ndarray', 'series']
 
 # documented changes from before the port, by case: the values must match,
@@ -136,6 +137,65 @@ HSU_CASES = {
     'hsu[irregular times]': lambda: _hsu(_rain_with_gap()),
     'hsu[NaN rain]': lambda: _hsu(_rain_with_nan()),
     'hsu[UTC]': lambda: _hsu(RAIN.tz_convert('UTC')),
+}
+
+# --- snow -------------------------------------------------------------------
+
+SNOWFALL = pd.Series(0., index=HOURS)
+SNOWFALL.iloc[[3, 4, 20, 21, 40]] = [2., 1.5, 3., 0.5, 2.5]
+POA = pd.Series(np.clip(600 * np.sin(np.linspace(0, 6 * np.pi, 48)), 0, None),
+                index=HOURS)
+TEMP_AIR = pd.Series(np.linspace(-6., 4., 48), index=HOURS)
+SNOW_DEPTH = pd.Series(10., index=HOURS)
+SNOW_DEPTH.iloc[30:36] = 0.5
+
+
+def _coverage(snowfall=SNOWFALL, surface_tilt=35., **kwargs):
+    index = snowfall.index
+    return snow.coverage_nrel(snowfall, POA.loc[index], TEMP_AIR.loc[index],
+                              surface_tilt, **kwargs)
+
+
+def _with_nan(series, positions):
+    series = series.copy()
+    series.iloc[positions] = np.nan
+    return series
+
+
+def _quarter_hours():
+    index = pd.date_range('2026-01-01', periods=96, freq='15min',
+                          tz='Etc/GMT+7')
+    snowfall = pd.Series(0., index=index)
+    snowfall.iloc[[10, 11, 50]] = [0.4, 0.3, 0.6]
+    poa = pd.Series(np.linspace(0., 700., 96), index=index)
+    return snow.coverage_nrel(snowfall, poa, -2., 25.)
+
+
+SNOW_CASES = {
+    'coverage_nrel[default]': lambda: _coverage(),
+    'coverage_nrel[snow_depth]': lambda: _coverage(snow_depth=SNOW_DEPTH),
+    'coverage_nrel[initial_coverage]': lambda: _coverage(
+        initial_coverage=0.6),
+    'coverage_nrel[tilt Series]': lambda: _coverage(
+        surface_tilt=pd.Series(np.linspace(10., 50., 48), index=HOURS)),
+    'coverage_nrel[irregular times]': lambda: _coverage(
+        SNOWFALL.drop(SNOWFALL.index[10:14]), snow_depth=SNOW_DEPTH.drop(
+            SNOW_DEPTH.index[10:14])),
+    'coverage_nrel[NaN]': lambda: snow.coverage_nrel(
+        _with_nan(SNOWFALL, [4]), _with_nan(POA, [8, 9]),
+        _with_nan(TEMP_AIR, [25]), 35.,
+        snow_depth=_with_nan(SNOW_DEPTH, [33])),
+    'coverage_nrel[NaN tilt]': lambda: _coverage(
+        surface_tilt=_with_nan(pd.Series(30., index=HOURS), [0, 7, 30])),
+    'coverage_nrel[options]': lambda: _coverage(
+        threshold_snowfall=0.8, threshold_depth=2., can_slide_coefficient=-60.,
+        slide_amount_coefficient=0.25, snow_depth=SNOW_DEPTH),
+    'coverage_nrel[15min]': _quarter_hours,
+    'fully_covered_nrel[default]': lambda: snow.fully_covered_nrel(SNOWFALL),
+    'fully_covered_nrel[snow_depth]': lambda: snow.fully_covered_nrel(
+        SNOWFALL, SNOW_DEPTH, threshold_snowfall=1.5, threshold_depth=2.),
+    'fully_covered_nrel[irregular times]': lambda: snow.fully_covered_nrel(
+        SNOWFALL.drop(SNOWFALL.index[[1, 2]])),
 }
 
 # --- extraterrestrial radiation and decomposition ---------------------------
@@ -303,8 +363,8 @@ def _build():
         for kind in KINDS:
             cases[f'{name}[{kind}]'] = Case(
                 functools.partial(_type_case, name, kind))
-    for group in (SPA_CASES, HSU_CASES, EXTRA_CASES, TRANSPOSITION_CASES,
-                  OTHER_CASES):
+    for group in (SPA_CASES, HSU_CASES, SNOW_CASES, EXTRA_CASES,
+                  TRANSPOSITION_CASES, OTHER_CASES):
         cases.update({k: Case(v) for k, v in group.items()})
     cases['spa_python[how=numba]'] = Case(_spa_numba, requires=('numba',))
     cases.update(REJECT_CASES)

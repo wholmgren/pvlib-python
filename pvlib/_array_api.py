@@ -37,12 +37,18 @@ Timestamps, xarray time coordinates) at the boundary to one of
 and Timedeltas to float seconds. Inside the core, :py:func:`unix_to_civil`
 recovers calendar fields and :py:func:`rolling_sum` does time-window
 aggregation, on any array library.
+
+Time series functions, which step through time (``labeled_io``'s
+``index_time``), take time from one place per input type: the index of
+Series, the dimension of a ``times`` DataArray, or a 1-D ``times`` along the
+last axis of other arrays. The core always gets time on the last axis.
 """
 
 import contextlib
 import datetime
 import functools
 import inspect
+import math
 
 import numpy as np
 import pandas as pd
@@ -334,9 +340,9 @@ def rolling_sum(x, t, window, xp):
     Sum of ``x`` over the time window ``(t - window, t]`` at each ``t``, like
     pandas ``rolling(window, closed='right').sum()``.
 
-    ``t`` is 1-D, increasing, in seconds; ``window`` is in seconds. Works for
-    irregular timestamps and has no data-dependent shapes, so it also runs
-    inside ``jax.jit``.
+    ``t`` is 1-D, increasing, in seconds, and is the last axis of ``x``;
+    ``window`` is in seconds. Works for irregular timestamps and has no
+    data-dependent shapes, so it also runs inside ``jax.jit``.
 
     Sums are differences of a running total, so their absolute error grows
     with the total (about 1e-16 times it), where pandas' error grows with the
@@ -354,13 +360,27 @@ def rolling_sum(x, t, window, xp):
 
 def take_last(values, flags, xp):
     """
-    At each position, ``values`` at the most recent position (inclusive)
-    where ``flags`` is True, or 0 before the first. A forward fill without a
-    loop or data-dependent shapes; ``flags`` is 1-D.
+    At each position along the last axis, ``values`` at the most recent
+    position (inclusive) where ``flags`` is True, or 0 before the first. A
+    forward fill without a loop or data-dependent shapes. ``values`` and
+    ``flags`` broadcast together; the result has their shape.
+
+    The standard's ``searchsorted`` is 1-D, so the running counts of flags
+    in each row are offset by the row number times ``n + 1``, where ``n`` is
+    the length of the last axis. That makes all rows one increasing 1-D
+    array, which ``searchsorted`` searches at once.
     """
-    count = xp.cumulative_sum(xp.astype(flags, xp.int64))
-    last = xp.searchsorted(count, count, side='left')
-    return xp.where(count > 0, xp.take(values, last, axis=-1), 0.)
+    values, flags = xp.broadcast_arrays(values, flags)
+    shape = tuple(flags.shape)
+    n = shape[-1]
+    rows = math.prod(shape[:-1])
+    count = xp.cumulative_sum(xp.astype(flags, xp.int64), axis=-1)
+    offset = xp.arange(rows, dtype=xp.int64,
+                       device=array_api_compat.device(count)) * (n + 1)
+    key = xp.reshape(count + xp.reshape(offset, shape[:-1] + (1,)), (-1,))
+    last = xp.searchsorted(key, key, side='left')
+    found = xp.reshape(xp.take(xp.reshape(values, (-1,)), last), shape)
+    return xp.where(count > 0, found, 0.)
 
 
 def where_safe(cond, x, f, fill_value, xp, safe=1.):
@@ -502,7 +522,7 @@ def _wrap_pandas(out, index, name):
     return out
 
 
-def _call_xarray(arguments, call, name):
+def _call_xarray(arguments, call, name, time_dim=None):
     """
     Call ``call`` on the underlying arrays of the DataArray ``arguments``
     with :py:func:`xarray.apply_ufunc`, and label the result.
@@ -512,6 +532,10 @@ def _call_xarray(arguments, call, name):
     none, instead of broadcasting them. So a term that depends only on time
     is computed once per time, not once per grid cell. Dask arrays pass
     through unchanged.
+
+    ``time_dim`` names the time dimension of a time series function. It is
+    the last axis of every array the core gets, and of the result, wherever
+    it was in the inputs; arrays without it get a size-1 last axis.
     """
     import xarray as xr
 
@@ -519,9 +543,20 @@ def _call_xarray(arguments, call, name):
     dims = []
     for k in keys:
         dims += [d for d in arguments[k].dims if d not in dims]
+    if time_dim is None:
+        core = [[]] * len(keys)
+    else:
+        core = [[time_dim] if time_dim in arguments[k].dims else []
+                for k in keys]
+        dims = [d for d in dims if d != time_dim] + [time_dim]
     called = {}
 
     def call_on_data(*data):
+        if time_dim is not None:
+            # apply_ufunc moves the time dimension last, and gives arrays
+            # without it no axis for it
+            data = [x if c else array_namespace(x).expand_dims(x, axis=-1)
+                    for x, c in zip(data, core)]
         # apply_ufunc leaves out leading size-1 dimensions, so the arrays
         # broadcast to the shape of all the dimensions
         full = np.broadcast_shapes(*(tuple(x.shape) for x in data))
@@ -546,6 +581,8 @@ def _call_xarray(arguments, call, name):
     # other quantities, so the inputs' attributes (units, ...) are dropped
     first = xr.apply_ufunc(
         call_on_data, *(arguments[k] for k in keys), dask='allowed',
+        input_core_dims=core,
+        output_core_dims=[[]] if time_dim is None else [[time_dim]],
         join=xr.get_options()['arithmetic_join'], keep_attrs=False)
     out = called['out']
     labeled = [first] + [first.copy(data=o) for o in called['outputs'][1:]]
@@ -697,10 +734,23 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
     timedelta : tuple of str, optional
         Parameters converted from Timedelta-like to float seconds.
     index_time : str, optional
-        A parameter that, when None, is filled with the DatetimeIndex of the
-        first Series argument. For functions whose pandas API takes time from
-        an index. It should also appear in ``time``. A ValueError is raised
-        if it is None and there is no DatetimeIndex to take it from.
+        The time parameter of a time series function, one whose pandas API
+        takes time from the index. It defaults to None, comes last in the
+        signature, and should also appear in ``time``. Time then comes from
+        one place, by the type of the other ``arrays`` arguments:
+
+        - Series with a DatetimeIndex: the index of the first. If the
+          parameter is given too, it must be the same times (compared as
+          instants) or ``ValueError`` is raised.
+        - DataArrays: the parameter, which must be a 1-D DataArray. Its
+          dimension is time, wherever it is in the other DataArrays.
+        - anything else: the parameter, which must be 1-D. Time is the last
+          axis of the other arrays.
+
+        If one of them is missing, or a DataArray is given without a
+        DataArray of times, ``ValueError`` is raised. In all three cases the
+        core gets time on the last axis of its arrays, and the result has it
+        there too.
     """
     time = time or {}
 
@@ -769,8 +819,9 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
             # unwrapping
             keys = list(given)
             out_name = name(arguments) if callable(name) else name
-            if index_time and arguments.get(index_time) is None:
-                _fill_index_time(arguments, index_time)
+            time_dim = None
+            if index_time:
+                time_dim = _series_time(arguments, index_time, arrays)
                 if index_time not in given:
                     keys.append(index_time)
             for k in timedelta:
@@ -787,7 +838,7 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
                 arguments = {k: arguments[k] for k in names if k in arguments}
                 return _call_xarray(arguments,
                                     lambda: call_core(arguments, times),
-                                    out_name)
+                                    out_name, time_dim)
             found, masks = [], []
             for k in keys:
                 v = arguments[k]
@@ -820,10 +871,64 @@ def labeled_io(name=_INFER, arrays=(), time=None, timedelta=(),
 labeled_io.INFER = _INFER
 
 
-def _fill_index_time(arguments, index_time):
-    series = [v for v in arguments.values() if isinstance(v, pd.Series)]
-    if series and isinstance(series[0].index, pd.DatetimeIndex):
-        arguments[index_time] = series[0].index
-    else:
-        raise ValueError(f'{index_time} is required unless the data are '
-                         'Series with a DatetimeIndex')
+def _series_time(arguments, param, arrays):
+    """
+    Apply the time rule of ``labeled_io``'s ``index_time`` to ``param``:
+    fill it in from the index of Series data, check it, and return the name
+    of the time dimension of DataArray data, or None.
+    """
+    t = arguments.get(param)
+    data = {k: arguments[k] for k in arrays
+            if k != param and arguments.get(k) is not None}
+    if _is_dataarray(t) or any(_is_dataarray(v) for v in data.values()):
+        if not (_is_dataarray(t) and t.ndim == 1):
+            raise ValueError(
+                f'{param} must be a 1-D DataArray, such as da.time, when the '
+                'data are DataArrays: its dimension says which one is time')
+        return t.dims[0]
+    index = next((v.index for v in data.values() if isinstance(v, pd.Series)
+                  and isinstance(v.index, pd.DatetimeIndex)), None)
+    if index is not None:
+        if t is not None:
+            _check_same_times(t, index, param)
+        arguments[param] = index
+        return None
+    if t is None:
+        raise ValueError(f'{param} is required unless the data are Series '
+                         'with a DatetimeIndex')
+    if np.ndim(t) != 1:
+        raise ValueError(f'{param} must be 1-D, not {np.ndim(t)}-D: time is '
+                         'the last axis of the data')
+    n = np.shape(t)[0]
+    for k, v in data.items():
+        shape = tuple(np.shape(v)) if not isinstance(v, dict) else ()
+        if shape and shape[-1] not in (n, 1):
+            raise ValueError(
+                f'{k} has shape {shape}, but {param} has {n} values. Time is '
+                'the last axis of the data; give values that are constant in '
+                'time a last axis of size 1')
+    return None
+
+
+def _check_same_times(t, index, param):
+    """Raise unless ``t`` is the times of ``index``, as instants."""
+    try:
+        if _is_datetime_like(t):
+            given = _datetime_to_number(t, 'unix')
+        elif isinstance(t, np.ma.MaskedArray):
+            given = _filled(t, np.float64)
+        else:
+            given = np.asarray(t, dtype=np.float64)
+    except (TypeError, ValueError, RuntimeError) as e:
+        # the index replaces t, so it must not pass unchecked
+        raise TypeError(f'{param} must be datetimes, or Unix seconds that '
+                        'NumPy can read, with Series data') from e
+    expected = _datetime_to_number(index, 'unix')
+    # 1 µs, a few float64 steps of Unix seconds, for seconds calculated
+    # otherwise than by pvlib.tools.datetime_to_unix
+    if given.shape != expected.shape or not np.allclose(
+            given, expected, rtol=0, atol=1e-6):
+        raise ValueError(
+            f'{param} differs from the index of the Series data. For Series, '
+            f'the index is the time: leave out {param}, or make it equal '
+            'the index')

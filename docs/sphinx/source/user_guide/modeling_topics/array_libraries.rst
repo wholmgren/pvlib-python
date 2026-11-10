@@ -50,6 +50,8 @@ So far these functions accept arrays from other libraries:
   :py:func:`~pvlib.temperature.faiman`
 - power: :py:func:`~pvlib.pvsystem.pvwatts_dc`,
   :py:func:`~pvlib.inverter.pvwatts`
+- snow: :py:func:`~pvlib.snow.fully_covered_nrel`,
+  :py:func:`~pvlib.snow.coverage_nrel`
 - soiling: :py:func:`~pvlib.soiling.hsu`
 - tools: :py:func:`~pvlib.tools.cosd`, :py:func:`~pvlib.tools.sind`,
   :py:func:`~pvlib.tools.tand`, :py:func:`~pvlib.tools.asind`,
@@ -128,9 +130,8 @@ Time
 The array API standard has no datetime type, so time can also be given as
 numbers:
 
-- :py:func:`~pvlib.solarposition.spa_python` and
-  :py:func:`~pvlib.soiling.hsu` take float64 seconds since 1970-01-01 00:00
-  UTC ("Unix seconds");
+- :py:func:`~pvlib.solarposition.spa_python` and the time series functions
+  below take float64 seconds since 1970-01-01 00:00 UTC ("Unix seconds");
 - :py:func:`~pvlib.irradiance.get_extra_radiation` and
   :py:func:`~pvlib.irradiance.erbs` take the day of year.
 
@@ -144,12 +145,53 @@ seconds with :py:func:`pvlib.tools.unix_to_doy`, which works on any array
 library and inside ``jax.jit``.
 
 Unix seconds must be float64: in float32 they resolve only 128 seconds, so
-:py:func:`~pvlib.solarposition.spa_python` and :py:func:`~pvlib.soiling.hsu`
-raise ``TypeError`` for float32 seconds. Integer seconds are converted to
+the functions that take them raise ``TypeError`` for float32 seconds. Integer seconds are converted to
 float64, also with float32 data. PyTorch and JAX create float32 arrays by
 default. In JAX, enable float64 first with
 ``jax.config.update('jax_enable_x64', True)``. GPUs without float64, such as
 Apple's, can't calculate solar position.
+
+.. _array-libraries-time-series:
+
+Time series
+-----------
+
+:py:func:`~pvlib.soiling.hsu`, :py:func:`~pvlib.snow.fully_covered_nrel` and
+:py:func:`~pvlib.snow.coverage_nrel` step through time, so they need to know
+which way time runs in their inputs. They take it from one place, chosen by
+the type of the data:
+
+==================  ===========================================================
+Data                Time
+==================  ===========================================================
+pandas Series       the index, as before; leave out ``times``
+xarray DataArrays   ``times``, a DataArray such as ``da.time``, whose dimension
+                    is time wherever it is in the data
+other arrays        ``times``, 1-D, along the last axis of the data
+==================  ===========================================================
+
+``times`` holds datetimes or Unix seconds. Given with Series, it must equal
+their index, or ``ValueError`` is raised, so the two can't silently
+disagree; naive local times, for example, would be taken as UTC. Without
+Series, ``times`` is required. Results have time last: on the last axis of
+an array, and as the last dimension of a DataArray.
+
+So data for several sites or orientations run in one call. With arrays,
+give values that are constant in time, such as a tilt for each row, a last
+axis of size 1:
+
+.. ipython:: python
+
+    from pvlib import snow
+
+    hours = pd.date_range('2026-01-01', freq='1h', periods=12, tz='Etc/GMT+7')
+    snowfall = np.where(np.arange(12) == 2, 3., 0.)  # 3 cm at 02:00
+    tilt = np.array([[20.], [40.]])  # two rows of modules
+    coverage = snow.coverage_nrel(snowfall, 300., 1., tilt, times=hours)
+    coverage.shape
+    coverage[:, :6].round(2)
+
+The snow slides off the steeper row faster.
 
 Gradients
 ---------
